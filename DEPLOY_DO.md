@@ -75,6 +75,12 @@ docker compose pull
 docker compose up -d --build
 ```
 
+一键更新代码并强制重建重启（推荐排障用）：
+
+```bash
+APP_DIR=/opt/pvbot/usdt_telegram_membership bash /opt/pvbot/usdt_telegram_membership/deploy/redeploy.sh
+```
+
 ## 7）GitHub 自动同步到服务器（CI/CD）
 
 ### 7.1 服务器侧：准备 SSH 部署 Key
