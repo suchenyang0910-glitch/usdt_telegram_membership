@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 import time
+import re
 from typing import Iterable
 
 from core.logging_setup import setup_logging
@@ -117,6 +118,13 @@ def main() -> int:
         issues.append("PAYMENT_MODE=single_address 但 RECEIVE_ADDRESS 未设置")
     if PAYMENT_MODE == "address_pool" and not USDT_ADDRESS_POOL:
         issues.append("PAYMENT_MODE=address_pool 但 USDT_ADDRESS_POOL 为空")
+
+    tron_addr_re = re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
+    if RECEIVE_ADDRESS and not tron_addr_re.match(RECEIVE_ADDRESS):
+        issues.append("RECEIVE_ADDRESS 格式可能不正确（应为 34 位 TRON 地址）")
+    bad_pool = [a for a in USDT_ADDRESS_POOL if not tron_addr_re.match(a)]
+    if bad_pool:
+        issues.append(f"USDT_ADDRESS_POOL 存在疑似无效地址：{bad_pool[0]}")
 
     if MIN_TX_AGE_SEC < 0:
         issues.append("MIN_TX_AGE_SEC 不能为负数")

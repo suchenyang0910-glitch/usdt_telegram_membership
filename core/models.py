@@ -161,6 +161,16 @@ def _sync_address_pool(conn):
     cur = conn.cursor()
     for addr in USDT_ADDRESS_POOL:
         cur.execute("INSERT IGNORE INTO address_pool (addr) VALUES (%s)", (addr,))
+    if USDT_ADDRESS_POOL:
+        placeholders = ",".join(["%s"] * len(USDT_ADDRESS_POOL))
+        cur.execute(
+            f"""
+            DELETE FROM address_pool
+            WHERE assigned_to IS NULL
+              AND addr NOT IN ({placeholders})
+            """,
+            tuple(USDT_ADDRESS_POOL),
+        )
     conn.commit()
     cur.close()
 
@@ -229,6 +239,31 @@ def allocate_address(telegram_id: int) -> str:
         conn.commit()
         cur2.close(); cur.close()
         return addr
+    finally:
+        conn.close()
+
+
+def reset_user_address(telegram_id: int) -> str | None:
+    u = get_user(telegram_id)
+    if not u or not u.get("wallet_addr"):
+        return None
+    old_addr = u["wallet_addr"]
+
+    conn = get_conn()
+    try:
+        conn.start_transaction()
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE users SET wallet_addr=NULL, addr_index=NULL WHERE telegram_id=%s",
+            (telegram_id,),
+        )
+        cur.execute(
+            "UPDATE address_pool SET assigned_to=NULL, assigned_at=NULL WHERE assigned_to=%s",
+            (telegram_id,),
+        )
+        conn.commit()
+        cur.close()
+        return old_addr
     finally:
         conn.close()
 

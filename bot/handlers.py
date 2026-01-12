@@ -9,18 +9,28 @@ from telegram.ext import ContextTypes
 from config import (
     PLANS,
     BOT_USERNAME,
+    ADMIN_USER_IDS,
     PAYMENT_MODE,
     RECEIVE_ADDRESS,
     PAYMENT_SUFFIX_ENABLE,
     PAYMENT_SUFFIX_MIN,
     PAYMENT_SUFFIX_MAX,
 )
-from core.models import get_user, upsert_user_basic, allocate_address, create_pending_order
+from core.models import (
+    get_user,
+    upsert_user_basic,
+    allocate_address,
+    create_pending_order,
+    reset_user_address,
+)
 from core.utils import b58decode, b58encode
 from bot.i18n import t, normalize_lang
 from core.models import bind_inviter
 import logging
 logger = logging.getLogger(__name__)
+
+def _is_admin(user_id: int) -> bool:
+    return bool(ADMIN_USER_IDS) and user_id in ADMIN_USER_IDS
 
 def _main_menu_kb(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -56,6 +66,15 @@ def _plans_kb(lang: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("⬅️ Back", callback_data="menu_home")],
         ]
     )
+
+
+def _pay_detail_kb(lang: str) -> InlineKeyboardMarkup:
+    rows = list(_plans_kb(lang).inline_keyboard)
+    if lang == "zh":
+        rows.insert(0, [InlineKeyboardButton("📋 复制地址", callback_data="copy_addr")])
+    else:
+        rows.insert(0, [InlineKeyboardButton("📋 Copy Address", callback_data="copy_addr")])
+    return InlineKeyboardMarkup(rows)
 
 
 def _pick_payment_amount(base: Decimal) -> Decimal:
@@ -159,6 +178,41 @@ async def plans(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(t(lang, "plan_line", name=p["name"], price=p["price"], days=p["days"]))
     await update.message.reply_text("\n".join(lines), parse_mode="HTML", reply_markup=_plans_kb(lang))
 
+async def reset_addr(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or not _is_admin(user.id):
+        return
+
+    target_id = user.id
+    args = context.args or []
+    if args:
+        try:
+            target_id = int(args[0])
+        except Exception:
+            target_id = user.id
+
+    old_addr = reset_user_address(target_id)
+
+    if PAYMENT_MODE == "single_address" and RECEIVE_ADDRESS:
+        new_addr = RECEIVE_ADDRESS
+    else:
+        try:
+            new_addr = allocate_address(target_id)
+        except Exception:
+            new_addr = None
+
+    if update.message:
+        if old_addr:
+            await update.message.reply_text(
+                f"已重置地址。\n旧地址：<code>{old_addr}</code>\n新地址：<code>{new_addr or '（暂不可用）'}</code>",
+                parse_mode="HTML",
+            )
+        else:
+            await update.message.reply_text(
+                f"当前无已绑定地址。\n新地址：<code>{new_addr or '（暂不可用）'}</code>",
+                parse_mode="HTML",
+            )
+
 
 async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -196,6 +250,25 @@ async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             msg = "Send /invite to get your personal invite link."
         await query.edit_message_text(text=msg, reply_markup=_main_menu_kb(lang))
+        return
+
+    if data == "copy_addr" and telegram_id:
+        u = get_user(telegram_id)
+        if PAYMENT_MODE == "single_address" and RECEIVE_ADDRESS:
+            addr = RECEIVE_ADDRESS
+        else:
+            addr = (u and u.get("wallet_addr"))
+            if not addr:
+                try:
+                    addr = allocate_address(telegram_id)
+                except Exception:
+                    addr = None
+
+        if lang == "zh":
+            text = f"收款地址：<code>{addr or '（暂不可用）'}</code>"
+        else:
+            text = f"Payment address: <code>{addr or '(unavailable)'}</code>"
+        await query.message.reply_text(text=text, parse_mode="HTML")
         return
 
     if data.startswith("pay_") and telegram_id:
@@ -236,7 +309,7 @@ async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Address: <code>{addr or '(unavailable)'}</code>\n\n"
                 "The system checks every minute and will DM you an invite link after payment is detected."
             )
-        await query.edit_message_text(text=msg, reply_markup=_plans_kb(lang), parse_mode="HTML")
+        await query.edit_message_text(text=msg, reply_markup=_pay_detail_kb(lang), parse_mode="HTML")
         return
 
 
