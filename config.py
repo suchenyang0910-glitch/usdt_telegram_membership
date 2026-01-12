@@ -32,14 +32,6 @@ ADMIN_REPORT_CHAT_ID = int(_admin_report_chat_id) if _admin_report_chat_id else 
 ADMIN_REPORT_ENABLE = os.getenv("ADMIN_REPORT_ENABLE", "1") == "1"
 ADMIN_REPORT_HOURLY = os.getenv("ADMIN_REPORT_HOURLY", "1") == "1"
 
-USERBOT_ENABLE = os.getenv("USERBOT_ENABLE", "0") == "1"
-USERBOT_API_ID = int(os.getenv("USERBOT_API_ID", "0") or 0)
-USERBOT_API_HASH = os.getenv("USERBOT_API_HASH", "").strip()
-USERBOT_STRING_SESSION = os.getenv("USERBOT_STRING_SESSION", "").strip()
-USERBOT_SESSION_NAME = os.getenv("USERBOT_SESSION_NAME", "tmp/userbot/telethon").strip()
-USERBOT_CLIP_SECONDS = int(os.getenv("USERBOT_CLIP_SECONDS", str(CLIP_SECONDS)))
-USERBOT_CLIP_RANDOM = os.getenv("USERBOT_CLIP_RANDOM", "1" if CLIP_RANDOM else "0") == "1"
-
 # 10 个 USDT-TRC20 收款地址（替换成你的地址）
 _DEFAULT_USDT_ADDRESS_POOL = [
     "TWAVjpfcdH68wQPFFnzrDPdZPAHhr7RAr2",
@@ -96,6 +88,14 @@ CLIP_SECONDS = int(os.getenv("CLIP_SECONDS", "30"))
 CLIP_RANDOM  = os.getenv("CLIP_RANDOM", "1") == "1"
 SEND_RETRY   = 3
 MAX_TG_DOWNLOAD_MB = int(os.getenv("MAX_TG_DOWNLOAD_MB", "19"))
+
+USERBOT_ENABLE = os.getenv("USERBOT_ENABLE", "0") == "1"
+USERBOT_API_ID = int(os.getenv("USERBOT_API_ID", "0") or 0)
+USERBOT_API_HASH = os.getenv("USERBOT_API_HASH", "").strip()
+USERBOT_STRING_SESSION = os.getenv("USERBOT_STRING_SESSION", "").strip()
+USERBOT_SESSION_NAME = os.getenv("USERBOT_SESSION_NAME", "tmp/userbot/telethon").strip()
+USERBOT_CLIP_SECONDS = int(os.getenv("USERBOT_CLIP_SECONDS", str(CLIP_SECONDS)))
+USERBOT_CLIP_RANDOM = os.getenv("USERBOT_CLIP_RANDOM", "1" if CLIP_RANDOM else "0") == "1"
 
 # 邀请奖励（按套餐 code 区分）
 INVITE_REWARD = {
