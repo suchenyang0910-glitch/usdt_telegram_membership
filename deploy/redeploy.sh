@@ -2,7 +2,7 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/pvbot/usdt_telegram_membership}"
 BRANCH="${BRANCH:-main}"
-NO_CACHE="${NO_CACHE:-1}"
+NO_CACHE="${NO_CACHE:-0}"
 CLEAN="${CLEAN:-0}"
 
 cd "$APP_DIR"

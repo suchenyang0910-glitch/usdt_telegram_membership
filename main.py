@@ -7,7 +7,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from config import BOT_TOKEN, PAID_CHANNEL_ID, AUTO_CLIP_FROM_PAID_CHANNEL
 from core.logging_setup import setup_logging
 from core.models import init_tables
-from bot.handlers import start, plans, invite, on_menu_button, reset_addr
+from bot.handlers import start, plans, invite, on_menu_button, reset_addr, my_id
 from bot.scheduler import check_deposits_job, check_expired_job, check_expiring_job
 from bot.clipper import private_channel_video_handler
 from bot.uploader import build_upload_conversation_handler
@@ -25,6 +25,7 @@ def main():
     app.add_handler(CommandHandler("plans", plans))
     app.add_handler(CommandHandler("invite", invite))
     app.add_handler(CommandHandler("reset_addr", reset_addr))
+    app.add_handler(MessageHandler(filters.Regex(r"^(我的ID|我的id|myid|my id)$"), my_id))
     app.add_handler(build_upload_conversation_handler())
     app.add_handler(CallbackQueryHandler(on_menu_button))
 

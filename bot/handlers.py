@@ -168,6 +168,27 @@ async def plans(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(t(lang, "plan_line", name=p["name"], price=p["price"], days=p["days"]))
     await update.message.reply_text("\n".join(lines), parse_mode="HTML", reply_markup=_plans_kb(lang))
 
+async def my_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    if not msg:
+        return
+    user = update.effective_user
+    chat = update.effective_chat
+    if not user or not chat:
+        return
+
+    username = f"@{user.username}" if user.username else ""
+    name = (user.full_name or "").strip()
+
+    text = (
+        f"用户ID：<code>{user.id}</code>\n"
+        f"群组/聊天ID：<code>{chat.id}</code>\n"
+        f"聊天类型：<code>{chat.type}</code>\n"
+        f"用户名：<code>{username}</code>\n"
+        f"昵称：<code>{name}</code>"
+    )
+    await msg.reply_text(text, parse_mode="HTML")
+
 async def reset_addr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user or not _is_admin(user.id):
