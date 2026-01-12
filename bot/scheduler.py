@@ -16,6 +16,9 @@ from config import (
     LOG_RETENTION_DAYS,
     ADMIN_REPORT_HOURLY,
     USDT_ADDRESS_POOL,
+    ADMIN_REPORT_TZ_OFFSET,
+    ADMIN_REPORT_QUIET_START_HOUR,
+    ADMIN_REPORT_QUIET_END_HOUR,
 )
 from core.models import (
     get_all_users,
@@ -43,6 +46,8 @@ from core.logging_setup import cleanup_old_logs
 from bot.admin_report import notify_recharge_success, send_admin_text
 import logging
 logger = logging.getLogger(__name__)
+
+_last_overnight_report_local_date = None
 
 async def cleanup_downloads_job(context: ContextTypes.DEFAULT_TYPE):
     roots = [
@@ -81,9 +86,45 @@ async def hourly_admin_report_job(context: ContextTypes.DEFAULT_TYPE):
 
     bot = context.bot
     now = datetime.utcnow()
-    start = now - timedelta(hours=1)
+    local_now = now + timedelta(hours=int(ADMIN_REPORT_TZ_OFFSET))
+    local_hour = int(local_now.hour)
 
-    orders = get_success_orders_between(start, now)
+    quiet_start = int(ADMIN_REPORT_QUIET_START_HOUR)
+    quiet_end = int(ADMIN_REPORT_QUIET_END_HOUR)
+
+    def _in_quiet(h: int) -> bool:
+        if quiet_start == quiet_end:
+            return False
+        if quiet_start < quiet_end:
+            return quiet_start <= h < quiet_end
+        return (h >= quiet_start) or (h < quiet_end)
+
+    global _last_overnight_report_local_date
+
+    if _in_quiet(local_hour):
+        return
+
+    if local_hour == quiet_end:
+        local_end = local_now.replace(hour=quiet_end, minute=0, second=0, microsecond=0)
+        span_hours = (24 - quiet_start) + quiet_end if quiet_start > quiet_end else (quiet_end - quiet_start)
+        local_start = local_end - timedelta(hours=span_hours)
+
+        local_end_date = local_end.date()
+        if _last_overnight_report_local_date == local_end_date:
+            return
+        _last_overnight_report_local_date = local_end_date
+
+        start = local_start - timedelta(hours=int(ADMIN_REPORT_TZ_OFFSET))
+        end = local_end - timedelta(hours=int(ADMIN_REPORT_TZ_OFFSET))
+        title = "<b>夜间汇总（22:00-08:00）</b>"
+        time_range = f"{local_start.strftime('%m-%d %H:%M')} - {local_end.strftime('%m-%d %H:%M')} 本地时间"
+    else:
+        start = now - timedelta(hours=1)
+        end = now
+        title = "<b>每小时充值汇报</b>"
+        time_range = f"{(local_now - timedelta(hours=1)).strftime('%m-%d %H:%M')} - {local_now.strftime('%H:%M')} 本地时间"
+
+    orders = get_success_orders_between(start, end)
     users = {int(o["telegram_id"]) for o in orders if o.get("telegram_id") is not None}
     total = sum((Decimal(str(o.get("amount") or 0)) for o in orders), Decimal("0"))
 
@@ -99,8 +140,8 @@ async def hourly_admin_report_job(context: ContextTypes.DEFAULT_TYPE):
         balances.append((addr, bal))
 
     lines = []
-    lines.append("<b>每小时充值汇报</b>")
-    lines.append(f"时间：<code>{start.strftime('%m-%d %H:%M')} - {now.strftime('%H:%M')} UTC</code>")
+    lines.append(title)
+    lines.append(f"时间：<code>{time_range}</code>")
     lines.append(f"充值人数：<code>{len(users)}</code>")
     lines.append(f"充值笔数：<code>{len(orders)}</code>")
     lines.append(f"充值总额：<code>{total}</code> USDT")

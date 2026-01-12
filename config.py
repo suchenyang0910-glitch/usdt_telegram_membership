@@ -31,6 +31,9 @@ _admin_report_chat_id = os.getenv("ADMIN_REPORT_CHAT_ID", "").strip()
 ADMIN_REPORT_CHAT_ID = int(_admin_report_chat_id) if _admin_report_chat_id else None
 ADMIN_REPORT_ENABLE = os.getenv("ADMIN_REPORT_ENABLE", "1") == "1"
 ADMIN_REPORT_HOURLY = os.getenv("ADMIN_REPORT_HOURLY", "1") == "1"
+ADMIN_REPORT_TZ_OFFSET = int(os.getenv("ADMIN_REPORT_TZ_OFFSET", "8"))
+ADMIN_REPORT_QUIET_START_HOUR = int(os.getenv("ADMIN_REPORT_QUIET_START_HOUR", "22"))
+ADMIN_REPORT_QUIET_END_HOUR = int(os.getenv("ADMIN_REPORT_QUIET_END_HOUR", "8"))
 
 SUPPORT_ENABLE = os.getenv("SUPPORT_ENABLE", "0") == "1"
 _support_group_id = os.getenv("SUPPORT_GROUP_ID", "").strip()
