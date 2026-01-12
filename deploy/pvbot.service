@@ -1,0 +1,18 @@
+[Unit]
+Description=PV Telegram Membership Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/pvbot
+EnvironmentFile=/opt/pvbot/.env
+ExecStart=/opt/pvbot/.venv/bin/python /opt/pvbot/main.py
+Restart=always
+RestartSec=3
+StandardOutput=append:/opt/pvbot/logs/runtime.log
+StandardError=append:/opt/pvbot/logs/runtime.log
+
+[Install]
+WantedBy=multi-user.target
+

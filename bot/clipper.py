@@ -1,0 +1,167 @@
+# clipper.py-*- coding: utf-8 -*-
+import os
+import random
+import subprocess
+import time
+import logging
+
+from telegram import Update
+from telegram.ext import ContextTypes
+from telegram.error import BadRequest
+
+from config import (
+    DOWNLOAD_DIR,
+    CLIP_DIR,
+    CLIP_SECONDS,
+    CLIP_RANDOM,
+    SEND_RETRY,
+    FREE_CHANNEL_ID_1,
+    FREE_CHANNEL_ID_2,
+    HIGHLIGHT_CHANNEL_ID,
+    MAX_TG_DOWNLOAD_MB,
+)
+from bot.captions import highlight_caption
+
+logger = logging.getLogger(__name__)
+
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+os.makedirs(CLIP_DIR, exist_ok=True)
+
+async def private_channel_video_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    监听付费频道内的新视频：
+    1）下载原视频（不超过约 19MB）
+    2）用 ffmpeg 切一个短片段
+    3）发到两个免费频道做试看引流
+    """
+    message = update.channel_post
+    if not message or not message.video:
+        return
+
+    video = message.video
+    file_size = getattr(video, "file_size", None)
+
+    # 先判断文件体积，太大就跳过，避免直接 BadRequest
+    if file_size and file_size > MAX_TG_DOWNLOAD_MB * 1024 * 1024:
+        logger.warning(
+            "[clipper] 视频过大，跳过剪辑 file_id=%s size=%.2fMB limit=%sMB",
+            video.file_id,
+            file_size / 1024 / 1024,
+            MAX_TG_DOWNLOAD_MB,
+        )
+        # 你也可以在这里给自己（管理员）发一条提示消息，告知这条视频没剪辑
+        return
+
+    src = os.path.join(DOWNLOAD_DIR, f"{video.file_id}.mp4")
+    dst = os.path.join(CLIP_DIR, f"{video.file_id}_clip.mp4")
+
+    # 下载原视频
+    try:
+        file = await context.bot.get_file(video.file_id)
+        await file.download_to_drive(src)
+        logger.info(
+            "[clipper] 下载原视频成功 file_id=%s path=%s size=%.2fMB",
+            video.file_id,
+            src,
+            (file_size or 0) / 1024 / 1024,
+        )
+    except BadRequest as e:
+        # 再保险：即使 file_size 没有或判断不准，一旦出现 File is too big，直接跳过
+        if "File is too big" in str(e):
+            logger.error(
+                "[clipper] Telegram 报错 File is too big，无法下载 file_id=%s",
+                video.file_id,
+                exc_info=True,
+            )
+            return
+        logger.error(
+            "[clipper] get_file 发生 BadRequest file_id=%s err=%s",
+            video.file_id,
+            e,
+            exc_info=True,
+        )
+        return
+    except Exception as e:
+        logger.error(
+            "[clipper] 下载原视频失败 file_id=%s err=%s",
+            video.file_id,
+            e,
+            exc_info=True,
+        )
+        return
+
+    duration = video.duration or 0
+    clip_len = min(CLIP_SECONDS, duration) if duration else CLIP_SECONDS
+
+    if duration <= clip_len or not CLIP_RANDOM:
+        start = 0
+    else:
+        start = random.randint(0, max(0, duration - clip_len))
+
+    # 先尝试无损剪辑，不行再转码
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", str(start),
+        "-i", src,
+        "-t", str(clip_len),
+        "-c", "copy",
+        dst,
+    ]
+
+    try:
+        res = subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if res.returncode != 0:
+            logger.warning("[clipper] 复制剪辑失败，尝试转码方式 file_id=%s", video.file_id)
+            cmd2 = [
+                "ffmpeg", "-y",
+                "-ss", str(start),
+                "-i", src,
+                "-t", str(clip_len),
+                "-vcodec", "libx264",
+                "-acodec", "aac",
+                dst,
+            ]
+            subprocess.run(cmd2, check=True)
+    except Exception as e:
+        logger.error("[clipper] ffmpeg 剪辑失败 file_id=%s err=%s", video.file_id, e, exc_info=True)
+        try:
+            os.remove(src)
+        except Exception:
+            pass
+        return
+
+    caption = highlight_caption()
+
+    targets = []
+    for ch in (HIGHLIGHT_CHANNEL_ID, FREE_CHANNEL_ID_1, FREE_CHANNEL_ID_2):
+        if ch and ch not in targets:
+            targets.append(ch)
+
+    for ch in targets:
+        for i in range(SEND_RETRY):
+            try:
+                with open(dst, "rb") as f:
+                    await context.bot.send_video(chat_id=ch, video=f, caption=caption)
+                logger.info("[clipper] 已将剪辑发送到频道 %s (尝试第 %s 次)", ch, i + 1)
+                break
+            except Exception as e:
+                logger.error(
+                    "[clipper] 发送剪辑到 %s 失败（第 %s 次）: %s",
+                    ch,
+                    i + 1,
+                    e,
+                    exc_info=True,
+                )
+                time.sleep(1)
+
+    # 清理临时文件
+    try:
+        os.remove(src)
+        os.remove(dst)
+    except Exception:
+        pass

@@ -1,0 +1,32 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        INSTALL_MEDIA: "0"
+    env_file:
+      - ../.env
+    volumes:
+      - ../logs:/app/logs
+      - ../tmp:/app/tmp
+    restart: unless-stopped
+    depends_on:
+      - mysql
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: usdt_membership
+      MYSQL_USER: usdt_bot
+      MYSQL_PASSWORD: change_me
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+

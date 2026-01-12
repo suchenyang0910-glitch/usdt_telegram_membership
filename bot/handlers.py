@@ -1,0 +1,220 @@
+# bot/handlers.py
+from datetime import datetime
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes
+
+from config import PLANS, BOT_USERNAME
+from core.models import get_user, upsert_user_basic, allocate_address
+from core.utils import b58decode, b58encode
+from bot.i18n import t, normalize_lang
+from core.models import bind_inviter
+import logging
+logger = logging.getLogger(__name__)
+
+def _main_menu_kb(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("💳 付费 / 续费", callback_data="menu_plans")],
+            [InlineKeyboardButton("📅 我的会员", callback_data="menu_status")],
+            [InlineKeyboardButton("🎁 邀请赚钱", callback_data="menu_invite")],
+        ]
+        if lang == "zh"
+        else [
+            [InlineKeyboardButton("💳 Pay / Renew", callback_data="menu_plans")],
+            [InlineKeyboardButton("📅 My Membership", callback_data="menu_status")],
+            [InlineKeyboardButton("🎁 Invite", callback_data="menu_invite")],
+        ]
+    )
+
+
+def _plans_kb(lang: str) -> InlineKeyboardMarkup:
+    if lang == "zh":
+        return InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("⚡️ 月费 9.99", callback_data="pay_monthly")],
+                [InlineKeyboardButton("⚡️ 季度 19.99", callback_data="pay_quarter")],
+                [InlineKeyboardButton("⚡️ 年费 79.99", callback_data="pay_yearly")],
+                [InlineKeyboardButton("⬅️ 返回", callback_data="menu_home")],
+            ]
+        )
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Monthly 9.99", callback_data="pay_monthly")],
+            [InlineKeyboardButton("Quarter 19.99", callback_data="pay_quarter")],
+            [InlineKeyboardButton("Yearly 79.99", callback_data="pay_yearly")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="menu_home")],
+        ]
+    )
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    telegram_id = user.id
+    username = user.username or ""
+    lang = normalize_lang(user.language_code or "en")
+
+    # 解析邀请参数 /start ref_xxx
+    logger.info("handers.py--->解析邀请参数 /start ref_xxx")
+    args = context.args or []
+    if args and args[0].startswith("ref_"):
+        code = args[0][4:]
+        try:
+            inviter_id = b58decode(code)
+            if inviter_id != telegram_id:
+                bind_inviter(telegram_id, inviter_id)
+        except Exception:
+            pass
+
+    # 更新基础信息
+    logger.info("handers.py--->更新基础信息")
+    upsert_user_basic(telegram_id, username, lang)
+
+    u = get_user(telegram_id)
+    if u and u.get("wallet_addr"):
+        addr = u["wallet_addr"]
+        paid_until = u.get("paid_until")
+    else:
+        try:
+            addr = allocate_address(telegram_id)
+        except Exception:
+            addr = None
+        paid_until = None
+        u = get_user(telegram_id)
+    logger.info("handers.py--->upsert_user_basic")
+    parts = []
+    parts.append(t(lang, "welcome_title"))
+    parts.append(t(lang, "welcome_body"))
+
+    if paid_until and paid_until > datetime.utcnow():
+        parts.append(t(lang, "current_status",
+                       until=paid_until.strftime("%Y-%m-%d %H:%M:%S")))
+    else:
+        parts.append(t(lang, "no_membership"))
+
+    if lang == "zh":
+        parts.append(t(lang, "pricing_block"))
+    else:
+        lines = [t(lang, "plans_title")]
+        for p in PLANS:
+            lines.append(t(lang, "plan_line", name=p["name"], price=p["price"], days=p["days"]))
+        parts.append("\n".join(lines))
+
+    if addr:
+        parts.append(t(lang, "pay_instructions", addr=addr))
+    else:
+        parts.append("当前收款地址池已满，请稍后再试或联系客服。")
+    parts.append(t(lang, "contact_hint", bot=BOT_USERNAME))
+
+    await update.message.reply_text(
+        "\n\n".join(parts),
+        parse_mode="HTML",
+        reply_markup=_main_menu_kb(lang),
+    )
+    
+
+async def plans(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = normalize_lang(update.effective_user.language_code or "en")
+    if lang == "zh":
+        await update.message.reply_text(t(lang, "pricing_block"), reply_markup=_plans_kb(lang))
+        return
+    lines = [t(lang, "plans_command_title")]
+    for p in PLANS:
+        lines.append(t(lang, "plan_line", name=p["name"], price=p["price"], days=p["days"]))
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML", reply_markup=_plans_kb(lang))
+
+
+async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    user = update.effective_user
+    lang = normalize_lang((user and user.language_code) or "en")
+    telegram_id = user.id if user else None
+
+    data = query.data or ""
+    if data == "menu_home":
+        await query.edit_message_reply_markup(reply_markup=_main_menu_kb(lang))
+        return
+
+    if data == "menu_plans":
+        text = t(lang, "pricing_block") if lang == "zh" else t(lang, "plans_command_title")
+        await query.edit_message_text(text=text, reply_markup=_plans_kb(lang))
+        return
+
+    if data == "menu_status" and telegram_id:
+        u = get_user(telegram_id)
+        paid_until = u.get("paid_until") if u else None
+        if paid_until and paid_until > datetime.utcnow():
+            msg = t(lang, "current_status", until=paid_until.strftime("%Y-%m-%d %H:%M:%S"))
+        else:
+            msg = t(lang, "no_membership")
+        await query.edit_message_text(text=msg, reply_markup=_main_menu_kb(lang))
+        return
+
+    if data == "menu_invite":
+        if lang == "zh":
+            msg = "发送 /invite 获取你的专属邀请链接与海报。"
+        else:
+            msg = "Send /invite to get your personal invite link."
+        await query.edit_message_text(text=msg, reply_markup=_main_menu_kb(lang))
+        return
+
+    if data.startswith("pay_") and telegram_id:
+        u = get_user(telegram_id)
+        addr = (u and u.get("wallet_addr"))
+        if not addr:
+            try:
+                addr = allocate_address(telegram_id)
+            except Exception:
+                addr = None
+        price_map = {"pay_monthly": "9.99", "pay_quarter": "19.99", "pay_yearly": "79.99"}
+        amount = price_map.get(data)
+        if lang == "zh":
+            msg = (
+                "请使用 TRON（USDT-TRC20）转账指定金额：\n\n"
+                f"金额：{amount} USDT\n"
+                f"地址：`{addr or '（暂不可用）'}`\n\n"
+                "系统每分钟自动检测到账；到账后会私信你“会员频道邀请链接”。\n"
+                "如需续费，继续向同一地址转账即可。"
+            )
+        else:
+            msg = (
+                "Send USDT-TRC20 with the exact amount:\n\n"
+                f"Amount: {amount} USDT\n"
+                f"Address: `{addr or '(unavailable)'}`\n\n"
+                "The system checks every minute and will DM you an invite link after payment is detected."
+            )
+        await query.edit_message_text(text=msg, reply_markup=_plans_kb(lang))
+        return
+
+
+async def invite(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tg_user = update.effective_user
+    telegram_id = tg_user.id
+    lang = normalize_lang(tg_user.language_code or "en")
+
+    u = get_user(telegram_id)
+    username = (u and u.get("username")) or tg_user.username or str(telegram_id)
+    invite_count = (u and u.get("invite_count")) or 0
+    invite_days = (u and u.get("invite_reward_days")) or 0
+
+    code = b58encode(telegram_id)
+    link = f"https://t.me/{BOT_USERNAME}?start=ref_{code}"
+
+    intro = t(lang, "invite_panel_intro")
+    stats = t(lang, "invite_panel_stats", count=invite_count, days=invite_days)
+    link_block = t(lang, "invite_panel_link_block", link=link, code=code)
+    copy_hint = t(lang, "invite_panel_copy_hint", link=link)
+
+    msg = intro + "\n\n" + stats + "\n" + link_block + "\n" + copy_hint
+    await update.message.reply_text(msg)
+    try:
+        from bot.invite_poster import generate_invite_poster
+
+        poster_buf = generate_invite_poster(telegram_id, username, lang)
+        await update.message.reply_photo(photo=poster_buf)
+    except Exception:
+        return
