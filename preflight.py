@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import time
 from typing import Iterable
 
 from core.logging_setup import setup_logging
@@ -76,16 +77,20 @@ def check_ffmpeg() -> list[str]:
 
 
 def check_db() -> list[str]:
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT 1")
-        cur.fetchone()
-        cur.close()
-        conn.close()
-        return []
-    except Exception as e:
-        return [f"MySQL 连接失败：{e}"]
+    last_err = None
+    for _ in range(30):
+        try:
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+            cur.close()
+            conn.close()
+            return []
+        except Exception as e:
+            last_err = e
+            time.sleep(2)
+    return [f"MySQL 连接失败：{last_err}"]
 
 
 def main() -> int:

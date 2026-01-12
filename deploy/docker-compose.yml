@@ -12,7 +12,8 @@ services:
       - ../tmp:/app/tmp
     restart: unless-stopped
     depends_on:
-      - mysql
+      mysql:
+        condition: service_healthy
 
   mysql:
     image: mysql:8.0
@@ -20,12 +21,17 @@ services:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: usdt_membership
       MYSQL_USER: usdt_bot
-      MYSQL_PASSWORD: change_me
+      MYSQL_PASSWORD: 0910@Gmail..G
     ports:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
 
 volumes:
   mysql_data:
