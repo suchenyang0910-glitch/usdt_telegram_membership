@@ -28,6 +28,8 @@ services:
       - ../logs:/app/logs
       - ../tmp:/app/tmp
     command: ["bash","-lc","python userbot_main.py"]
+    stdin_open: true
+    tty: true
     restart: unless-stopped
 
   mysql:

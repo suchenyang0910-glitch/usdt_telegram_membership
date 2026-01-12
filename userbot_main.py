@@ -3,6 +3,7 @@ import json
 import os
 import random
 import subprocess
+import sys
 from datetime import datetime
 
 from telethon import TelegramClient, events
@@ -139,6 +140,12 @@ async def main():
         raise SystemExit("USERBOT_ENABLE=0")
     if not USERBOT_API_ID or not USERBOT_API_HASH:
         raise SystemExit("USERBOT_API_ID/USERBOT_API_HASH missing")
+    if not USERBOT_STRING_SESSION and not sys.stdin.isatty():
+        raise SystemExit(
+            "USERBOT_STRING_SESSION missing (non-interactive)\n"
+            "Run once to generate it:\n"
+            "docker compose run --rm userbot python userbot_session.py"
+        )
 
     _ensure_dir(os.path.dirname(USERBOT_SESSION_NAME) or ".")
     if USERBOT_STRING_SESSION:
