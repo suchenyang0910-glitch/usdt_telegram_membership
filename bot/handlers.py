@@ -33,15 +33,25 @@ def _is_admin(user_id: int) -> bool:
     return bool(ADMIN_USER_IDS) and user_id in ADMIN_USER_IDS
 
 def _main_menu_kb(lang: str) -> InlineKeyboardMarkup:
+    if lang == "zh":
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("⚡️ 月费 9.99", callback_data="pay_monthly"),
+                    InlineKeyboardButton("⚡️ 季度 19.99", callback_data="pay_quarter"),
+                    InlineKeyboardButton("⚡️ 年费 79.99", callback_data="pay_yearly"),
+                ],
+                [InlineKeyboardButton("📅 我的会员", callback_data="menu_status")],
+                [InlineKeyboardButton("🎁 邀请赚钱", callback_data="menu_invite")],
+            ]
+        )
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("💳 付费 / 续费", callback_data="menu_plans")],
-            [InlineKeyboardButton("📅 我的会员", callback_data="menu_status")],
-            [InlineKeyboardButton("🎁 邀请赚钱", callback_data="menu_invite")],
-        ]
-        if lang == "zh"
-        else [
-            [InlineKeyboardButton("💳 Pay / Renew", callback_data="menu_plans")],
+            [
+                InlineKeyboardButton("Monthly 9.99", callback_data="pay_monthly"),
+                InlineKeyboardButton("Quarter 19.99", callback_data="pay_quarter"),
+                InlineKeyboardButton("Yearly 79.99", callback_data="pay_yearly"),
+            ],
             [InlineKeyboardButton("📅 My Membership", callback_data="menu_status")],
             [InlineKeyboardButton("🎁 Invite", callback_data="menu_invite")],
         ]
@@ -66,15 +76,6 @@ def _plans_kb(lang: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("⬅️ Back", callback_data="menu_home")],
         ]
     )
-
-
-def _pay_detail_kb(lang: str) -> InlineKeyboardMarkup:
-    rows = list(_plans_kb(lang).inline_keyboard)
-    if lang == "zh":
-        rows.insert(0, [InlineKeyboardButton("📋 复制地址", callback_data="copy_addr")])
-    else:
-        rows.insert(0, [InlineKeyboardButton("📋 Copy Address", callback_data="copy_addr")])
-    return InlineKeyboardMarkup(rows)
 
 
 def _pick_payment_amount(base: Decimal) -> Decimal:
@@ -147,18 +148,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         parts.append(t(lang, "no_membership"))
 
-    if lang == "zh":
-        parts.append(t(lang, "pricing_block"))
-    else:
-        lines = [t(lang, "plans_title")]
-        for p in PLANS:
-            lines.append(t(lang, "plan_line", name=p["name"], price=p["price"], days=p["days"]))
-        parts.append("\n".join(lines))
-
-    if addr:
-        parts.append(t(lang, "pay_instructions", addr=addr))
-    else:
-        parts.append("当前收款地址池已满，请稍后再试或联系客服。")
+    parts.append(t(lang, "pricing_block"))
     parts.append(t(lang, "contact_hint", bot=BOT_USERNAME))
 
     await update.message.reply_text(
@@ -252,25 +242,6 @@ async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text=msg, reply_markup=_main_menu_kb(lang))
         return
 
-    if data == "copy_addr" and telegram_id:
-        u = get_user(telegram_id)
-        if PAYMENT_MODE == "single_address" and RECEIVE_ADDRESS:
-            addr = RECEIVE_ADDRESS
-        else:
-            addr = (u and u.get("wallet_addr"))
-            if not addr:
-                try:
-                    addr = allocate_address(telegram_id)
-                except Exception:
-                    addr = None
-
-        if lang == "zh":
-            text = f"收款地址：<code>{addr or '（暂不可用）'}</code>"
-        else:
-            text = f"Payment address: <code>{addr or '(unavailable)'}</code>"
-        await query.message.reply_text(text=text, parse_mode="HTML")
-        return
-
     if data.startswith("pay_") and telegram_id:
         u = get_user(telegram_id)
         plan_map = {
@@ -309,7 +280,7 @@ async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Address: <code>{addr or '(unavailable)'}</code>\n\n"
                 "The system checks every minute and will DM you an invite link after payment is detected."
             )
-        await query.edit_message_text(text=msg, reply_markup=_pay_detail_kb(lang), parse_mode="HTML")
+        await query.edit_message_text(text=msg, reply_markup=_plans_kb(lang), parse_mode="HTML")
         return
 
 

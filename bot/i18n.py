@@ -19,43 +19,39 @@ def normalize_lang(code: str) -> str:
 TEXTS: Dict[str, Dict[str, str]] = {
     # --- /start 欢迎 ---
     "welcome_title": {
-        "zh": "欢迎来到 PV Premium 付费频道 🔥",
+        "zh": "PV Premium 会员频道 🔥（完整合集 / 每日更新）",
         "en": "Welcome to PV Premium Channel 🔥",
         "km": "សូមស្វាគមន៍មកកាន់ PV Premium Channel 🔥",
         "vi": "Chào mừng đến kênh PV Premium 🔥",
     },
     "welcome_body": {
         "zh": (
-            "这里不是泛滥资源，而是 *高质量内容集中营*。\n\n"
-            "你将获得：\n"
-            "• 每周 100+ 条精选完整视频\n"
-            "• 按主题分类的系列合集，节省你大量时间\n"
-            "• 持续更新，历史内容长期保留，随时回看\n"
-            "• 仅限会员访问，不会在公开频道出现\n"
+            "别再在免费群里翻垃圾了。\n"
+            "这里是 <b>高质量完整视频</b> + <b>系列合集</b> 的会员库：\n"
+            "• 按主题整理，打开就能看\n"
+            "• 每日更新，历史内容可回看\n"
+            "• 付款后 <b>1 分钟内自动开通</b>，私信发入群邀请链接\n\n"
+            "现在就点击下方套餐开始开通："
         ),
         "en": (
-            "This is not random content – it's a *curated premium library*.\n\n"
-            "You get:\n"
-            "• 100+ new full videos every week\n"
-            "• Organized collections by theme to save your time\n"
-            "• Continuous updates with long-term access to history\n"
-            "• Members-only, not shared in public channels\n"
+            "Stop scrolling random content.\n"
+            "This is a <b>curated premium library</b> of full videos & collections:\n"
+            "• Organized by theme\n"
+            "• Updated daily, with history access\n"
+            "• Auto-activated within <b>1 minute</b>, invite link sent via DM\n\n"
+            "Choose a plan below to activate:"
         ),
         "km": (
-            "នេះមិនមែនជាមាតិកាចៃដន្យទេ ប៉ុន្តែជា *បណ្ណាល័យមាតិកាគុណភាពខ្ពស់*។\n\n"
-            "អ្នកនឹងទទួលបាន៖\n"
-            "• វីដេអូពេញលេញ 100+ រៀងរាល់សប្ដាហ៍\n"
-            "• ចែកជាប្រភេទ/ប្រធានបទ ដើម្បីសន្សំម៉ោង\n"
-            "• អាប់ដេតជាបន្តបន្ទាប់ និងអាចមើលថយក្រោយបាន\n"
-            "• សម្រាប់សមាជិកបង់ប្រាក់ប៉ុណ្ណោះ មិនចែករំលែកសាធារណៈទេ\n"
+            "នេះជាបណ្ណាល័យសមាជិកដែលមានវីដេអូពេញលេញ និងជាប្រភេទ៖\n"
+            "• រៀបចំតាមប្រធានបទ\n"
+            "• អាប់ដេតរៀងរាល់ថ្ងៃ និងអាចមើលថយក្រោយបាន\n"
+            "• បើកសិទ្ធិស្វ័យប្រវត្តិក្នុង 1 នាទី ហើយផ្ញើលីងចូលក្រុមតាម DM\n"
         ),
         "vi": (
-            "Đây không phải kho video rác, mà là *thư viện nội dung chọn lọc*.\n\n"
-            "Bạn sẽ nhận được:\n"
-            "• Hơn 100 video full mới mỗi tuần\n"
-            "• Các bộ sưu tập theo chủ đề, tiết kiệm thời gian tìm kiếm\n"
-            "• Cập nhật đều, nội dung cũ vẫn có thể xem lại\n"
-            "• Chỉ dành cho thành viên, không phát tán công khai\n"
+            "Đây là thư viện premium video full & bộ sưu tập theo chủ đề:\n"
+            "• Sắp xếp theo chủ đề\n"
+            "• Cập nhật mỗi ngày, xem lại nội dung cũ\n"
+            "• Tự động kích hoạt trong 1 phút, gửi link qua DM\n"
         ),
     },
 
