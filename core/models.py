@@ -470,10 +470,10 @@ def get_pending_usdt_txs(telegram_id: int, addr: str, confirm_before: datetime) 
 def set_usdt_tx_status(
     tx_id: str,
     status: str,
-    telegram_id: int | None = None,
     plan_code: str | None = None,
     credited_amount: Decimal | None = None,
     processed_at: datetime | None = None,
+    telegram_id: int | None = None,
 ):
     conn = get_conn(); cur = conn.cursor()
     cur.execute(

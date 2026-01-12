@@ -82,7 +82,14 @@ async def check_deposits_job(context: ContextTypes.DEFAULT_TYPE):
 
             update_user_payment(telegram_id, new_paid_until, new_total, plan_code)
             mark_order_success(int(order["id"]), tx_id)
-            set_usdt_tx_status(tx_id, "processed", telegram_id, plan_code, Decimal(str(plan["price"])), datetime.utcnow())
+            set_usdt_tx_status(
+                tx_id,
+                "processed",
+                plan_code,
+                Decimal(str(plan["price"])),
+                datetime.utcnow(),
+                telegram_id=telegram_id,
+            )
 
             lang = user.get("language") or "en"
             try:
@@ -170,7 +177,7 @@ async def check_deposits_job(context: ContextTypes.DEFAULT_TYPE):
 
             update_user_payment(telegram_id, new_paid_until, new_total, last_plan_code)
             create_order(telegram_id, addr, tx_amount, last_plan_code, tx_id=tx_id)
-            set_usdt_tx_status(tx_id, "processed", last_plan_code, credited, datetime.utcnow())
+            set_usdt_tx_status(tx_id, "processed", last_plan_code, credited, datetime.utcnow(), telegram_id=telegram_id)
 
             try:
                 invite_link = await bot.create_chat_invite_link(
