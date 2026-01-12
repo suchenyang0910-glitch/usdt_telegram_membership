@@ -14,6 +14,8 @@ from config import (
     HIGHLIGHT_CHANNEL_ID,
     FREE_CHANNEL_ID_1,
     FREE_CHANNEL_ID_2,
+    SUPPORT_ENABLE,
+    SUPPORT_GROUP_ID,
     PAYMENT_MODE,
     RECEIVE_ADDRESS,
     PAYMENT_SUFFIX_ENABLE,
@@ -26,6 +28,8 @@ from core.models import (
     allocate_address,
     create_pending_order,
     reset_user_address,
+    support_store_mapping,
+    support_get_user_id,
 )
 from core.utils import b58decode, b58encode
 from bot.i18n import t, normalize_lang
@@ -192,6 +196,85 @@ async def my_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"昵称：<code>{name}</code>"
     )
     await msg.reply_text(text, parse_mode="HTML")
+
+async def chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    chat = update.effective_chat
+    if not msg or not chat:
+        return
+    title = getattr(chat, "title", "") or ""
+    text = (
+        f"聊天/群组/频道ID：<code>{chat.id}</code>\n"
+        f"类型：<code>{chat.type}</code>\n"
+        f"标题：<code>{title}</code>"
+    )
+    await msg.reply_text(text, parse_mode="HTML")
+
+async def support_user_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not SUPPORT_ENABLE or not SUPPORT_GROUP_ID:
+        return
+    msg = update.message
+    user = update.effective_user
+    if not msg or not user:
+        return
+    if msg.chat.type != "private":
+        return
+    if user.is_bot:
+        return
+
+    username = f"@{user.username}" if user.username else ""
+    name = (user.full_name or "").strip()
+    header = f"来自用户：<code>{user.id}</code> {username} {name}".strip()
+
+    ticket = await context.bot.send_message(chat_id=SUPPORT_GROUP_ID, text=header, parse_mode="HTML")
+    support_store_mapping(SUPPORT_GROUP_ID, ticket.message_id, int(user.id), int(msg.message_id))
+
+    if msg.text:
+        await context.bot.send_message(
+            chat_id=SUPPORT_GROUP_ID,
+            text=msg.text,
+            reply_to_message_id=ticket.message_id,
+        )
+        return
+
+    try:
+        await context.bot.copy_message(
+            chat_id=SUPPORT_GROUP_ID,
+            from_chat_id=msg.chat_id,
+            message_id=msg.message_id,
+            reply_to_message_id=ticket.message_id,
+        )
+    except Exception:
+        return
+
+async def support_group_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not SUPPORT_ENABLE or not SUPPORT_GROUP_ID:
+        return
+    msg = update.message
+    if not msg or not msg.reply_to_message:
+        return
+    if msg.chat_id != SUPPORT_GROUP_ID:
+        return
+    if msg.from_user and msg.from_user.is_bot:
+        return
+
+    reply_to_id = msg.reply_to_message.message_id
+    user_id = support_get_user_id(SUPPORT_GROUP_ID, reply_to_id)
+    if not user_id:
+        return
+
+    if msg.text:
+        await context.bot.send_message(chat_id=user_id, text=msg.text)
+        return
+
+    try:
+        await context.bot.copy_message(
+            chat_id=user_id,
+            from_chat_id=msg.chat_id,
+            message_id=msg.message_id,
+        )
+    except Exception:
+        return
 
 async def reset_addr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user

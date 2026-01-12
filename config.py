@@ -32,6 +32,10 @@ ADMIN_REPORT_CHAT_ID = int(_admin_report_chat_id) if _admin_report_chat_id else 
 ADMIN_REPORT_ENABLE = os.getenv("ADMIN_REPORT_ENABLE", "1") == "1"
 ADMIN_REPORT_HOURLY = os.getenv("ADMIN_REPORT_HOURLY", "1") == "1"
 
+SUPPORT_ENABLE = os.getenv("SUPPORT_ENABLE", "0") == "1"
+_support_group_id = os.getenv("SUPPORT_GROUP_ID", "").strip()
+SUPPORT_GROUP_ID = int(_support_group_id) if _support_group_id else None
+
 # 10 个 USDT-TRC20 收款地址（替换成你的地址）
 _DEFAULT_USDT_ADDRESS_POOL = [
     "TWAVjpfcdH68wQPFFnzrDPdZPAHhr7RAr2",
@@ -96,6 +100,8 @@ USERBOT_STRING_SESSION = os.getenv("USERBOT_STRING_SESSION", "").strip()
 USERBOT_SESSION_NAME = os.getenv("USERBOT_SESSION_NAME", "tmp/userbot/telethon").strip()
 USERBOT_CLIP_SECONDS = int(os.getenv("USERBOT_CLIP_SECONDS", str(CLIP_SECONDS)))
 USERBOT_CLIP_RANDOM = os.getenv("USERBOT_CLIP_RANDOM", "1" if CLIP_RANDOM else "0") == "1"
+_userbot_notify_chat_id = os.getenv("USERBOT_NOTIFY_CHAT_ID", "").strip()
+USERBOT_NOTIFY_CHAT_ID = int(_userbot_notify_chat_id) if _userbot_notify_chat_id else None
 
 # 邀请奖励（按套餐 code 区分）
 INVITE_REWARD = {

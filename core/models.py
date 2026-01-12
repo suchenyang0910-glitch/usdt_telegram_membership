@@ -90,6 +90,21 @@ def init_tables():
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     """)
 
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS support_relay (
+            id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+            group_chat_id   BIGINT NOT NULL,
+            group_msg_id    BIGINT NOT NULL,
+            user_id         BIGINT NOT NULL,
+            user_msg_id     BIGINT NULL,
+            created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uniq_support_map (group_chat_id, group_msg_id),
+            INDEX idx_support_user (user_id, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+    )
+
     conn.commit()
 
     _ensure_columns(
@@ -426,6 +441,36 @@ def get_success_orders_between(start: datetime, end: datetime) -> List[Dict]:
     rows = cur.fetchall()
     cur.close(); conn.close()
     return rows
+
+
+def support_store_mapping(group_chat_id: int, group_msg_id: int, user_id: int, user_msg_id: int | None) -> None:
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO support_relay (group_chat_id, group_msg_id, user_id, user_msg_id)
+        VALUES (%s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE user_id=VALUES(user_id), user_msg_id=VALUES(user_msg_id)
+        """,
+        (group_chat_id, group_msg_id, user_id, user_msg_id),
+    )
+    conn.commit()
+    cur.close(); conn.close()
+
+
+def support_get_user_id(group_chat_id: int, group_msg_id: int) -> int | None:
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        "SELECT user_id FROM support_relay WHERE group_chat_id=%s AND group_msg_id=%s",
+        (group_chat_id, group_msg_id),
+    )
+    row = cur.fetchone()
+    cur.close(); conn.close()
+    if not row:
+        return None
+    try:
+        return int(row[0])
+    except Exception:
+        return None
 
 
 def insert_usdt_tx_if_new(

@@ -22,12 +22,15 @@ from config import (
     USERBOT_CLIP_RANDOM,
     USERBOT_CLIP_SECONDS,
     USERBOT_ENABLE,
+    USERBOT_NOTIFY_CHAT_ID,
     USERBOT_SESSION_NAME,
     USERBOT_STRING_SESSION,
 )
 
 
 def _targets() -> list[int]:
+    if USERBOT_NOTIFY_CHAT_ID is not None:
+        return [int(USERBOT_NOTIFY_CHAT_ID)]
     ids: list[int] = []
     for x in ADMIN_USER_IDS:
         try:

@@ -1,6 +1,7 @@
 # bot/scheduler.py
 from datetime import datetime, timedelta
 from decimal import Decimal
+import os
 
 from telegram.ext import ContextTypes
 
@@ -42,6 +43,31 @@ from core.logging_setup import cleanup_old_logs
 from bot.admin_report import notify_recharge_success, send_admin_text
 import logging
 logger = logging.getLogger(__name__)
+
+async def cleanup_downloads_job(context: ContextTypes.DEFAULT_TYPE):
+    roots = [
+        os.path.join("tmp", "downloads"),
+        os.path.join("tmp", "clips"),
+        os.path.join("tmp", "userbot", "downloads"),
+        os.path.join("tmp", "userbot", "clips"),
+    ]
+    removed = 0
+    for root in roots:
+        try:
+            if not os.path.isdir(root):
+                continue
+            for name in os.listdir(root):
+                fp = os.path.join(root, name)
+                try:
+                    if os.path.isfile(fp):
+                        os.remove(fp)
+                        removed += 1
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    if removed:
+        logger.info("[tmp] cleanup_downloads_job removed=%s", removed)
 
 async def cleanup_logs_job(context: ContextTypes.DEFAULT_TYPE):
     removed = cleanup_old_logs(LOG_RETENTION_DAYS)

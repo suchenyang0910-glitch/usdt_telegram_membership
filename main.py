@@ -1,19 +1,31 @@
 # main.py
-import os
 import logging
+from datetime import time
 
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
 from config import BOT_TOKEN, PAID_CHANNEL_ID, AUTO_CLIP_FROM_PAID_CHANNEL
 from core.logging_setup import setup_logging
 from core.models import init_tables
-from bot.handlers import start, plans, invite, on_menu_button, reset_addr, my_id, diag
+from bot.handlers import (
+    start,
+    plans,
+    invite,
+    on_menu_button,
+    reset_addr,
+    my_id,
+    diag,
+    chat_id,
+    support_user_inbox,
+    support_group_reply,
+)
 from bot.scheduler import (
     check_deposits_job,
     check_expired_job,
     check_expiring_job,
     cleanup_logs_job,
     hourly_admin_report_job,
+    cleanup_downloads_job,
 )
 from bot.clipper import private_channel_video_handler
 from bot.uploader import build_upload_conversation_handler
@@ -33,7 +45,10 @@ def main():
     app.add_handler(CommandHandler("invite", invite))
     app.add_handler(CommandHandler("reset_addr", reset_addr))
     app.add_handler(CommandHandler("diag", diag))
+    app.add_handler(CommandHandler("chatid", chat_id))
     app.add_handler(MessageHandler(filters.Regex(r"^(我的ID|我的id|myid|my id)$"), my_id))
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, support_user_inbox))
+    app.add_handler(MessageHandler(filters.REPLY, support_group_reply))
     app.add_handler(build_upload_conversation_handler())
     app.add_handler(CallbackQueryHandler(on_menu_button))
     app.add_error_handler(application_error_handler)
@@ -53,6 +68,7 @@ def main():
     app.job_queue.run_repeating(check_expiring_job, interval=3600, first=120)
     app.job_queue.run_repeating(cleanup_logs_job, interval=21600, first=300)
     app.job_queue.run_repeating(hourly_admin_report_job, interval=3600, first=600)
+    app.job_queue.run_daily(cleanup_downloads_job, time=time(hour=3, minute=0))
 
     logger.info("🚀 Bot is Running — 收款 / 续费 / 踢人 / 剪辑 / 邀请裂变 已开启")
     app.run_polling()
