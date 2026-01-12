@@ -18,6 +18,8 @@ from bot.handlers import (
     chat_id,
     support_user_inbox,
     support_group_reply,
+    support_reply_button,
+    support_group_pending_reply,
 )
 from bot.scheduler import (
     check_deposits_job,
@@ -47,9 +49,11 @@ def main():
     app.add_handler(CommandHandler("diag", diag))
     app.add_handler(CommandHandler("chatid", chat_id))
     app.add_handler(MessageHandler(filters.Regex(r"^(我的ID|我的id|myid|my id)$"), my_id))
-    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, support_user_inbox))
-    app.add_handler(MessageHandler(filters.REPLY, support_group_reply))
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, support_user_inbox, block=False))
+    app.add_handler(MessageHandler(~filters.COMMAND, support_group_pending_reply, block=False))
+    app.add_handler(MessageHandler(filters.REPLY, support_group_reply, block=False))
     app.add_handler(build_upload_conversation_handler())
+    app.add_handler(CallbackQueryHandler(support_reply_button, pattern=r"^support_reply:", block=False))
     app.add_handler(CallbackQueryHandler(on_menu_button))
     app.add_error_handler(application_error_handler)
 

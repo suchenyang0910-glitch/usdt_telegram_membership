@@ -3,6 +3,8 @@ from datetime import datetime
 from decimal import Decimal
 import random
 
+import time
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
@@ -36,6 +38,8 @@ from bot.i18n import t, normalize_lang
 from core.models import bind_inviter
 import logging
 logger = logging.getLogger(__name__)
+
+_support_pending: dict[tuple[int, int], tuple[int, float]] = {}
 
 def _is_admin(user_id: int) -> bool:
     return bool(ADMIN_USER_IDS) and user_id in ADMIN_USER_IDS
@@ -224,28 +228,42 @@ async def support_user_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     username = f"@{user.username}" if user.username else ""
     name = (user.full_name or "").strip()
-    header = f"来自用户：<code>{user.id}</code> {username} {name}".strip()
+    u = get_user(int(user.id)) or {}
+    paid_until = u.get("paid_until")
+    now = datetime.utcnow()
+    if paid_until and paid_until > now:
+        member = f"会员：是 | 到期：{paid_until.strftime('%Y-%m-%d %H:%M:%S UTC')}"
+    elif paid_until:
+        member = f"会员：已到期 | 到期：{paid_until.strftime('%Y-%m-%d %H:%M:%S UTC')}"
+    else:
+        member = "会员：否"
 
-    ticket = await context.bot.send_message(chat_id=SUPPORT_GROUP_ID, text=header, parse_mode="HTML")
+    body = msg.text or (msg.caption or "[媒体]")
+    text = f"用户：<code>{user.id}</code> {username} {name} | {member}\n【消息】{body}".strip()
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("回复", callback_data="support_reply:pending")]])
+    ticket = await context.bot.send_message(chat_id=SUPPORT_GROUP_ID, text=text, parse_mode="HTML", reply_markup=kb)
     support_store_mapping(SUPPORT_GROUP_ID, ticket.message_id, int(user.id), int(msg.message_id))
-
-    if msg.text:
-        await context.bot.send_message(
-            chat_id=SUPPORT_GROUP_ID,
-            text=msg.text,
-            reply_to_message_id=ticket.message_id,
-        )
-        return
-
     try:
-        await context.bot.copy_message(
+        await context.bot.edit_message_reply_markup(
             chat_id=SUPPORT_GROUP_ID,
-            from_chat_id=msg.chat_id,
-            message_id=msg.message_id,
-            reply_to_message_id=ticket.message_id,
+            message_id=ticket.message_id,
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("回复", callback_data=f"support_reply:{ticket.message_id}")]]
+            ),
         )
     except Exception:
-        return
+        pass
+
+    if not msg.text:
+        try:
+            await context.bot.copy_message(
+                chat_id=SUPPORT_GROUP_ID,
+                from_chat_id=msg.chat_id,
+                message_id=msg.message_id,
+                reply_to_message_id=ticket.message_id,
+            )
+        except Exception:
+            return
 
 async def support_group_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not SUPPORT_ENABLE or not SUPPORT_GROUP_ID:
@@ -267,6 +285,67 @@ async def support_group_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
         await context.bot.send_message(chat_id=user_id, text=msg.text)
         return
 
+    try:
+        await context.bot.copy_message(
+            chat_id=user_id,
+            from_chat_id=msg.chat_id,
+            message_id=msg.message_id,
+        )
+    except Exception:
+        return
+
+async def support_reply_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not SUPPORT_ENABLE or not SUPPORT_GROUP_ID:
+        return
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    if not query.from_user or query.from_user.is_bot:
+        return
+    if query.message is None:
+        return
+    if query.message.chat_id != SUPPORT_GROUP_ID:
+        return
+    parts = query.data.split(":", 1)
+    if len(parts) != 2:
+        return
+    try:
+        ticket_id = int(parts[1])
+    except Exception:
+        return
+    user_id = support_get_user_id(SUPPORT_GROUP_ID, ticket_id)
+    if not user_id:
+        await query.answer("未找到对应用户", show_alert=True)
+        return
+    _support_pending[(SUPPORT_GROUP_ID, int(query.from_user.id))] = (int(user_id), time.time() + 600)
+    await query.answer("请在群里发送你的下一条消息（将转发给用户）", show_alert=True)
+
+async def support_group_pending_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not SUPPORT_ENABLE or not SUPPORT_GROUP_ID:
+        return
+    msg = update.message
+    if not msg:
+        return
+    if msg.chat_id != SUPPORT_GROUP_ID:
+        return
+    if msg.from_user is None or msg.from_user.is_bot:
+        return
+    key = (SUPPORT_GROUP_ID, int(msg.from_user.id))
+    state = _support_pending.get(key)
+    if not state:
+        return
+    user_id, exp = state
+    if time.time() > exp:
+        _support_pending.pop(key, None)
+        return
+    _support_pending.pop(key, None)
+
+    if msg.text:
+        try:
+            await context.bot.send_message(chat_id=user_id, text=msg.text)
+        except Exception:
+            return
+        return
     try:
         await context.bot.copy_message(
             chat_id=user_id,
