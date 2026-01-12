@@ -50,13 +50,11 @@ cp .env.example .env
 - `TRONGRID_API_KEY`
 - `MIN_TX_AGE_SEC`
 
-使用 compose 自带 MySQL 时，把 `.env` 里的 `DB_HOST` 设置为：
-- `DB_HOST=mysql`
+使用 compose 自带 MySQL 时，把 `.env` 里的 `DB_HOST` 设置为：`mysql`
 
-并确保：
-- `DB_NAME=usdt_membership`
-- `DB_USER=usdt_bot`
-- `DB_PASS` 与 `deploy/docker-compose.yml` 保持一致（也可以修改 compose）
+并确保数据库账号密码一致（两处要对齐）：
+- 应用侧：`DB_USER/DB_PASS/DB_NAME`
+- MySQL 容器侧：`MYSQL_USER/MYSQL_PASSWORD/MYSQL_DATABASE`
 
 ## 5）启动（第一次）
 

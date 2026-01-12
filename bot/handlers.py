@@ -1,11 +1,21 @@
 # bot/handlers.py
 from datetime import datetime
+from decimal import Decimal
+import random
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from config import PLANS, BOT_USERNAME
-from core.models import get_user, upsert_user_basic, allocate_address
+from config import (
+    PLANS,
+    BOT_USERNAME,
+    PAYMENT_MODE,
+    RECEIVE_ADDRESS,
+    PAYMENT_SUFFIX_ENABLE,
+    PAYMENT_SUFFIX_MIN,
+    PAYMENT_SUFFIX_MAX,
+)
+from core.models import get_user, upsert_user_basic, allocate_address, create_pending_order
 from core.utils import b58decode, b58encode
 from bot.i18n import t, normalize_lang
 from core.models import bind_inviter
@@ -48,6 +58,29 @@ def _plans_kb(lang: str) -> InlineKeyboardMarkup:
     )
 
 
+def _pick_payment_amount(base: Decimal) -> Decimal:
+    if PAYMENT_MODE == "single_address" and RECEIVE_ADDRESS:
+        enable = True
+    else:
+        enable = PAYMENT_SUFFIX_ENABLE
+
+    if not enable:
+        return base.quantize(Decimal("0.000001"))
+
+    lo = Decimal(str(PAYMENT_SUFFIX_MIN))
+    hi = Decimal(str(PAYMENT_SUFFIX_MAX))
+    if hi <= lo:
+        return base.quantize(Decimal("0.000001"))
+
+    span_steps = int(((hi - lo) / Decimal("0.0001")).to_integral_value(rounding="ROUND_FLOOR"))
+    if span_steps <= 0:
+        return (base + lo).quantize(Decimal("0.000001"))
+
+    r = random.randint(0, span_steps)
+    suffix = lo + (Decimal(r) * Decimal("0.0001"))
+    return (base + suffix).quantize(Decimal("0.000001"))
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     telegram_id = user.id
@@ -75,10 +108,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         addr = u["wallet_addr"]
         paid_until = u.get("paid_until")
     else:
-        try:
-            addr = allocate_address(telegram_id)
-        except Exception:
-            addr = None
+        if PAYMENT_MODE == "single_address" and RECEIVE_ADDRESS:
+            addr = RECEIVE_ADDRESS
+        else:
+            try:
+                addr = allocate_address(telegram_id)
+            except Exception:
+                addr = None
         paid_until = None
         u = get_user(telegram_id)
     logger.info("handers.py--->upsert_user_basic")
@@ -164,19 +200,32 @@ async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("pay_") and telegram_id:
         u = get_user(telegram_id)
-        addr = (u and u.get("wallet_addr"))
-        if not addr:
-            try:
-                addr = allocate_address(telegram_id)
-            except Exception:
-                addr = None
-        price_map = {"pay_monthly": "9.99", "pay_quarter": "19.99", "pay_yearly": "79.99"}
-        amount = price_map.get(data)
+        plan_map = {
+            "pay_monthly": ("monthly", Decimal("9.99")),
+            "pay_quarter": ("quarter", Decimal("19.99")),
+            "pay_yearly": ("yearly", Decimal("79.99")),
+        }
+        plan_code, base_amount = plan_map.get(data, ("monthly", Decimal("9.99")))
+
+        if PAYMENT_MODE == "single_address" and RECEIVE_ADDRESS:
+            addr = RECEIVE_ADDRESS
+        else:
+            addr = (u and u.get("wallet_addr"))
+            if not addr:
+                try:
+                    addr = allocate_address(telegram_id)
+                except Exception:
+                    addr = None
+
+        amount = _pick_payment_amount(base_amount)
+        if addr and PAYMENT_MODE == "single_address" and RECEIVE_ADDRESS:
+            create_pending_order(telegram_id, addr, amount, plan_code)
+
         if lang == "zh":
             msg = (
                 "请使用 TRON（USDT-TRC20）转账指定金额：\n\n"
-                f"金额：{amount} USDT\n"
-                f"地址：`{addr or '（暂不可用）'}`\n\n"
+                f"金额：{amount} USDT（请按金额精确转账）\n"
+                f"地址：<code>{addr or '（暂不可用）'}</code>\n\n"
                 "系统每分钟自动检测到账；到账后会私信你“会员频道邀请链接”。\n"
                 "如需续费，继续向同一地址转账即可。"
             )
@@ -184,10 +233,10 @@ async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg = (
                 "Send USDT-TRC20 with the exact amount:\n\n"
                 f"Amount: {amount} USDT\n"
-                f"Address: `{addr or '(unavailable)'}`\n\n"
+                f"Address: <code>{addr or '(unavailable)'}</code>\n\n"
                 "The system checks every minute and will DM you an invite link after payment is detected."
             )
-        await query.edit_message_text(text=msg, reply_markup=_plans_kb(lang))
+        await query.edit_message_text(text=msg, reply_markup=_plans_kb(lang), parse_mode="HTML")
         return
 
 

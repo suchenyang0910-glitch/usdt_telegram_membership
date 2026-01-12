@@ -108,6 +108,7 @@ def init_tables():
             ("usdt_txs", "idx_usdt_txs_uid_status", "INDEX idx_usdt_txs_uid_status (telegram_id, status)"),
             ("usdt_txs", "idx_usdt_txs_addr_status", "INDEX idx_usdt_txs_addr_status (addr, status)"),
             ("address_pool", "idx_address_pool_assigned", "INDEX idx_address_pool_assigned (assigned_to)"),
+            ("orders", "idx_orders_status_amount", "INDEX idx_orders_status_amount (status, amount, created_at)"),
         ],
     )
 
@@ -332,8 +333,52 @@ def create_order(telegram_id: int, addr: str, amount: Decimal,
     cur.close(); conn.close()
 
 
+def create_pending_order(telegram_id: int, addr: str, amount: Decimal, plan_code: str) -> int:
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO orders (telegram_id, addr, amount, plan_code, status, tx_id)
+        VALUES (%s, %s, %s, %s, 'pending', NULL)
+        """,
+        (telegram_id, addr, str(amount), plan_code),
+    )
+    order_id = cur.lastrowid
+    conn.commit()
+    cur.close(); conn.close()
+    return int(order_id)
+
+
+def match_pending_order_by_amount(addr: str, amount: Decimal, eps: Decimal) -> Optional[Dict]:
+    conn = get_conn(); cur = conn.cursor(dictionary=True)
+    low = amount - eps
+    high = amount + eps
+    cur.execute(
+        """
+        SELECT *
+        FROM orders
+        WHERE addr=%s AND status='pending' AND amount BETWEEN %s AND %s
+        ORDER BY created_at ASC
+        LIMIT 1
+        """,
+        (addr, str(low), str(high)),
+    )
+    row = cur.fetchone()
+    cur.close(); conn.close()
+    return row
+
+
+def mark_order_success(order_id: int, tx_id: str):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        "UPDATE orders SET status='success', tx_id=%s WHERE id=%s",
+        (tx_id, order_id),
+    )
+    conn.commit()
+    cur.close(); conn.close()
+
+
 def insert_usdt_tx_if_new(
-    telegram_id: int,
+    telegram_id: int | None,
     addr: str,
     tx_id: str,
     amount: Decimal,
@@ -346,12 +391,29 @@ def insert_usdt_tx_if_new(
         INSERT IGNORE INTO usdt_txs (tx_id, telegram_id, addr, from_addr, amount, block_time, status)
         VALUES (%s, %s, %s, %s, %s, %s, 'seen')
         """,
-        (tx_id, telegram_id, addr, from_addr or "", str(amount), block_time, ),
+        (tx_id, telegram_id, addr, from_addr or "", str(amount), block_time),
     )
     inserted = cur.rowcount == 1
     conn.commit()
     cur.close(); conn.close()
     return inserted
+
+
+def get_unassigned_usdt_txs(addr: str, confirm_before: datetime) -> List[Dict]:
+    conn = get_conn(); cur = conn.cursor(dictionary=True)
+    cur.execute(
+        """
+        SELECT *
+        FROM usdt_txs
+        WHERE addr=%s AND status='seen' AND telegram_id IS NULL
+          AND (block_time IS NULL OR block_time <= %s)
+        ORDER BY block_time ASC, created_at ASC
+        """,
+        (addr, confirm_before),
+    )
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return rows
 
 
 def get_pending_usdt_txs(telegram_id: int, addr: str, confirm_before: datetime) -> List[Dict]:
@@ -373,6 +435,7 @@ def get_pending_usdt_txs(telegram_id: int, addr: str, confirm_before: datetime) 
 def set_usdt_tx_status(
     tx_id: str,
     status: str,
+    telegram_id: int | None = None,
     plan_code: str | None = None,
     credited_amount: Decimal | None = None,
     processed_at: datetime | None = None,
@@ -381,10 +444,17 @@ def set_usdt_tx_status(
     cur.execute(
         """
         UPDATE usdt_txs
-        SET status=%s, plan_code=%s, credited_amount=%s, processed_at=%s
+        SET status=%s, telegram_id=COALESCE(%s, telegram_id), plan_code=%s, credited_amount=%s, processed_at=%s
         WHERE tx_id=%s
         """,
-        (status, plan_code, str(credited_amount) if credited_amount is not None else None, processed_at, tx_id),
+        (
+            status,
+            telegram_id,
+            plan_code,
+            str(credited_amount) if credited_amount is not None else None,
+            processed_at,
+            tx_id,
+        ),
     )
     conn.commit()
     cur.close(); conn.close()

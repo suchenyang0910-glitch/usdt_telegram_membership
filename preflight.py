@@ -19,7 +19,10 @@ from config import (
     MAX_TG_DOWNLOAD_MB,
     MIN_TX_AGE_SEC,
     PAID_CHANNEL_ID,
+    PAYMENT_MODE,
+    RECEIVE_ADDRESS,
     TRONGRID_API_KEY,
+    USDT_ADDRESS_POOL,
 )
 from core.db import get_conn
 from core.models import init_tables
@@ -109,6 +112,11 @@ def main() -> int:
 
     if not TRONGRID_API_KEY:
         issues.append("TRONGRID_API_KEY 未设置（可能被限流，强烈建议配置）")
+
+    if PAYMENT_MODE == "single_address" and not RECEIVE_ADDRESS:
+        issues.append("PAYMENT_MODE=single_address 但 RECEIVE_ADDRESS 未设置")
+    if PAYMENT_MODE == "address_pool" and not USDT_ADDRESS_POOL:
+        issues.append("PAYMENT_MODE=address_pool 但 USDT_ADDRESS_POOL 为空")
 
     if MIN_TX_AGE_SEC < 0:
         issues.append("MIN_TX_AGE_SEC 不能为负数")

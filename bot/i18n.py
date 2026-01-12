@@ -88,22 +88,22 @@ TEXTS: Dict[str, Dict[str, str]] = {
     "pay_instructions": {
         "zh": (
             "请使用 TRON（USDT-TRC20）向以下地址转账：\n"
-            "`{addr}`\n\n"
+            "<code>{addr}</code>\n\n"
             "系统每分钟自动检测到账，识别成功后将自动开通或续费你的频道访问权限，并私信你入群邀请链接。"
         ),
         "en": (
             "Please send *USDT-TRC20* to this address:\n"
-            "`{addr}`\n\n"
+            "<code>{addr}</code>\n\n"
             "The system checks payments every minute. Once detected, your access will be activated or extended automatically."
         ),
         "km": (
             "សូមផ្ទេរ *USDT-TRC20* ទៅអាសយដ្ឋាននេះ៖\n"
-            "`{addr}`\n\n"
+            "<code>{addr}</code>\n\n"
             "ប្រព័ន្ធនឹងពិនិត្យការទូទាត់រៀងរាល់១នាទី ហើយបើរកឃើញប្រាក់ចូល នឹងបើក ឬបន្តសិទ្ធិឱ្យអ្នកស្វ័យប្រវត្តិ។"
         ),
         "vi": (
             "Vui lòng chuyển *USDT-TRC20* tới địa chỉ sau:\n"
-            "`{addr}`\n\n"
+            "<code>{addr}</code>\n\n"
             "Hệ thống kiểm tra thanh toán mỗi phút. Khi nhận được, quyền truy cập của bạn sẽ được kích hoạt hoặc gia hạn tự động."
         ),
     },

@@ -28,7 +28,7 @@ for _x in (os.getenv("ADMIN_USER_IDS", "")).split(","):
 AUTO_CLIP_FROM_PAID_CHANNEL = os.getenv("AUTO_CLIP_FROM_PAID_CHANNEL", "0") == "1"
 
 # 10 个 USDT-TRC20 收款地址（替换成你的地址）
-USDT_ADDRESS_POOL = [
+_DEFAULT_USDT_ADDRESS_POOL = [
     "TWAVjpfcdH68wQPFFnzrDPdZPAHhr7RAr2",
     "TFfmSMHke79PX28Zb8graVKmzNSvyW3nnN",
     "TNr2VBxXZiiXufdNsi79bywKBZHMQqLetG",
@@ -40,6 +40,19 @@ USDT_ADDRESS_POOL = [
     "TUVeiBb515nuDv65qZ4PNYxSxWYnV5V5oo",
     "TS1SrKRXMx3w1HWceh7Fzn2TWq7yHzQRXY",
 ]
+
+_pool_env = os.getenv("USDT_ADDRESS_POOL", "").strip()
+if _pool_env:
+    _pool_env = _pool_env.replace("\n", ",")
+    USDT_ADDRESS_POOL = [x.strip() for x in _pool_env.split(",") if x.strip()]
+else:
+    USDT_ADDRESS_POOL = _DEFAULT_USDT_ADDRESS_POOL
+
+RECEIVE_ADDRESS = os.getenv("RECEIVE_ADDRESS", "").strip()
+PAYMENT_MODE = os.getenv("PAYMENT_MODE", "address_pool").strip().lower()
+PAYMENT_SUFFIX_ENABLE = os.getenv("PAYMENT_SUFFIX_ENABLE", "0") == "1"
+PAYMENT_SUFFIX_MIN = Decimal(os.getenv("PAYMENT_SUFFIX_MIN", "0.0001"))
+PAYMENT_SUFFIX_MAX = Decimal(os.getenv("PAYMENT_SUFFIX_MAX", "0.0099"))
 
 # TronGrid 查询 USDT 交易
 USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
