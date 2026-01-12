@@ -15,6 +15,21 @@ services:
       mysql:
         condition: service_healthy
 
+  userbot:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        INSTALL_MEDIA: "0"
+        INSTALL_USERBOT: "1"
+    env_file:
+      - ../.env
+    volumes:
+      - ../logs:/app/logs
+      - ../tmp:/app/tmp
+    command: ["bash","-lc","python userbot_main.py"]
+    restart: unless-stopped
+
   mysql:
     image: mysql:8.0
     env_file:

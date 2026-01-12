@@ -12,6 +12,9 @@ from config import (
     PAYMENT_MODE,
     RECEIVE_ADDRESS,
     AMOUNT_EPS,
+    LOG_RETENTION_DAYS,
+    ADMIN_REPORT_HOURLY,
+    USDT_ADDRESS_POOL,
 )
 from core.models import (
     get_all_users,
@@ -20,22 +23,68 @@ from core.models import (
     mark_user_expired_handled,
     get_users_expiring_within_days,
     mark_user_reminded,
-    create_order,
     get_user,
     get_inviter_id,
     add_invite_reward,
     insert_usdt_tx_if_new,
-    get_pending_usdt_txs,
     set_usdt_tx_status,
     get_unassigned_usdt_txs,
+    get_unassigned_usdt_txs_since,
+    get_address_assigned_at,
     match_pending_order_by_amount,
     mark_order_success,
+    get_success_orders_between,
 )
-from chain.tron_client import list_usdt_incoming
-from bot.payments import split_amount_to_plans, compute_new_paid_until
+from chain.tron_client import list_usdt_incoming, get_usdt_balance
+from bot.payments import compute_new_paid_until
 from bot.i18n import t, normalize_lang
+from core.logging_setup import cleanup_old_logs
+from bot.admin_report import notify_recharge_success, send_admin_text
 import logging
 logger = logging.getLogger(__name__)
+
+async def cleanup_logs_job(context: ContextTypes.DEFAULT_TYPE):
+    removed = cleanup_old_logs(LOG_RETENTION_DAYS)
+    if removed:
+        logger.info("[logs] 清理过期日志完成 removed=%s keep_days=%s", removed, LOG_RETENTION_DAYS)
+
+
+async def hourly_admin_report_job(context: ContextTypes.DEFAULT_TYPE):
+    if not ADMIN_REPORT_HOURLY:
+        return
+
+    bot = context.bot
+    now = datetime.utcnow()
+    start = now - timedelta(hours=1)
+
+    orders = get_success_orders_between(start, now)
+    users = {int(o["telegram_id"]) for o in orders if o.get("telegram_id") is not None}
+    total = sum((Decimal(str(o.get("amount") or 0)) for o in orders), Decimal("0"))
+
+    base_addrs = []
+    if PAYMENT_MODE == "single_address" and RECEIVE_ADDRESS:
+        base_addrs = [RECEIVE_ADDRESS]
+    else:
+        base_addrs = USDT_ADDRESS_POOL
+    addrs = list(dict.fromkeys([a for a in base_addrs if a]))
+    balances = []
+    for addr in addrs[:50]:
+        bal = get_usdt_balance(addr)
+        balances.append((addr, bal))
+
+    lines = []
+    lines.append("<b>每小时充值汇报</b>")
+    lines.append(f"时间：<code>{start.strftime('%m-%d %H:%M')} - {now.strftime('%H:%M')} UTC</code>")
+    lines.append(f"充值人数：<code>{len(users)}</code>")
+    lines.append(f"充值笔数：<code>{len(orders)}</code>")
+    lines.append(f"充值总额：<code>{total}</code> USDT")
+    lines.append("")
+    lines.append("<b>地址余额（USDT）</b>")
+    for addr, bal in balances:
+        v = "N/A" if bal is None else str(bal)
+        lines.append(f"<code>{addr}</code>  <code>{v}</code>")
+
+    await send_admin_text(bot, "\n".join(lines), parse_mode="HTML")
 
 async def check_deposits_job(context: ContextTypes.DEFAULT_TYPE):
     bot = context.bot
@@ -90,6 +139,10 @@ async def check_deposits_job(context: ContextTypes.DEFAULT_TYPE):
                 datetime.utcnow(),
                 telegram_id=telegram_id,
             )
+            try:
+                await notify_recharge_success(bot, telegram_id, tx_amount, plan_code, addr, tx_id)
+            except Exception:
+                pass
 
             lang = user.get("language") or "en"
             try:
@@ -138,18 +191,14 @@ async def check_deposits_job(context: ContextTypes.DEFAULT_TYPE):
 
     users = get_all_users()
     for u in users:
-        telegram_id = u["telegram_id"]
-        addr        = u.get("wallet_addr")
+        addr = u.get("wallet_addr")
         if not addr:
             continue
-
-        lang        = u.get("language") or "en"
-        total_old = Decimal(str(u.get("total_received") or 0))
-        paid_until = u.get("paid_until")
+        assigned_at = get_address_assigned_at(addr)
 
         for tx in list_usdt_incoming(addr):
             insert_usdt_tx_if_new(
-                telegram_id=telegram_id,
+                telegram_id=None,
                 addr=addr,
                 tx_id=tx["tx_id"],
                 amount=tx["amount"],
@@ -157,7 +206,8 @@ async def check_deposits_job(context: ContextTypes.DEFAULT_TYPE):
                 block_time=(tx.get("block_time") and tx["block_time"].replace(tzinfo=None)),
             )
 
-        pending = get_pending_usdt_txs(telegram_id, addr, confirm_before)
+        eps = Decimal(str(AMOUNT_EPS))
+        pending = get_unassigned_usdt_txs_since(addr, confirm_before, assigned_at)
         if not pending:
             continue
 
@@ -165,19 +215,42 @@ async def check_deposits_job(context: ContextTypes.DEFAULT_TYPE):
             tx_id = tx["tx_id"]
             tx_amount = Decimal(str(tx.get("amount") or 0))
 
-            plans_used, remain = split_amount_to_plans(tx_amount)
-            if not plans_used:
+            order = match_pending_order_by_amount(addr, tx_amount, eps)
+            if not order:
                 set_usdt_tx_status(tx_id, "unmatched")
                 continue
 
-            credited = sum(p["price"] for p in plans_used)
-            new_total = total_old + credited
-            new_paid_until = compute_new_paid_until(paid_until, plans_used)
-            last_plan_code = plans_used[-1]["code"]
+            telegram_id = int(order["telegram_id"])
+            plan_code = order["plan_code"]
+            user = get_user(telegram_id)
+            if not user:
+                set_usdt_tx_status(tx_id, "unmatched")
+                continue
 
-            update_user_payment(telegram_id, new_paid_until, new_total, last_plan_code)
-            create_order(telegram_id, addr, tx_amount, last_plan_code, tx_id=tx_id)
-            set_usdt_tx_status(tx_id, "processed", last_plan_code, credited, datetime.utcnow(), telegram_id=telegram_id)
+            paid_until = user.get("paid_until")
+            plan = next((p for p in PLANS if p["code"] == plan_code), None)
+            if not plan:
+                set_usdt_tx_status(tx_id, "unmatched")
+                continue
+
+            new_paid_until = compute_new_paid_until(paid_until, [plan])
+            total_old = Decimal(str(user.get("total_received") or 0))
+            new_total = total_old + Decimal(str(plan["price"]))
+
+            update_user_payment(telegram_id, new_paid_until, new_total, plan_code)
+            mark_order_success(int(order["id"]), tx_id)
+            set_usdt_tx_status(
+                tx_id,
+                "processed",
+                plan_code,
+                Decimal(str(plan["price"])),
+                datetime.utcnow(),
+                telegram_id=telegram_id,
+            )
+            try:
+                await notify_recharge_success(bot, telegram_id, tx_amount, plan_code, addr, tx_id)
+            except Exception:
+                pass
 
             try:
                 invite_link = await bot.create_chat_invite_link(
@@ -186,7 +259,7 @@ async def check_deposits_job(context: ContextTypes.DEFAULT_TYPE):
                     member_limit=1,
                 )
                 msg = t(
-                    lang,
+                    user.get("language") or "en",
                     "success_payment",
                     amount=str(tx_amount),
                     until=new_paid_until.strftime("%Y-%m-%d %H:%M:%S UTC"),
@@ -198,7 +271,7 @@ async def check_deposits_job(context: ContextTypes.DEFAULT_TYPE):
 
             inviter_id = get_inviter_id(telegram_id)
             if inviter_id and total_old == 0:
-                reward_days = INVITE_REWARD.get(last_plan_code, 0)
+                reward_days = INVITE_REWARD.get(plan_code, 0)
                 if reward_days > 0:
                     add_invite_reward(inviter_id, reward_days, telegram_id)
 
@@ -220,9 +293,6 @@ async def check_deposits_job(context: ContextTypes.DEFAULT_TYPE):
                             await bot.send_message(chat_id=inviter_id, text=reward_msg)
                         except Exception as e:
                             logger.warning(f"[check_deposits] 通知邀请人失败 inviter={inviter_id}: {e}")
-
-            total_old = new_total
-            paid_until = new_paid_until
 
 
 async def check_expired_job(context: ContextTypes.DEFAULT_TYPE):

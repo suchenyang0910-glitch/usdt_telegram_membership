@@ -21,6 +21,7 @@ from config import (
     MAX_TG_DOWNLOAD_MB,
 )
 from bot.captions import highlight_caption
+from bot.admin_report import send_admin_text
 
 logger = logging.getLogger(__name__)
 
@@ -41,15 +42,28 @@ async def private_channel_video_handler(update: Update, context: ContextTypes.DE
     video = message.video
     file_size = getattr(video, "file_size", None)
 
-    # 先判断文件体积，太大就跳过，避免直接 BadRequest
-    if file_size and file_size > MAX_TG_DOWNLOAD_MB * 1024 * 1024:
+    effective_limit_mb = min(int(MAX_TG_DOWNLOAD_MB), 20)
+    if file_size and file_size > effective_limit_mb * 1024 * 1024:
         logger.warning(
             "[clipper] 视频过大，跳过剪辑 file_id=%s size=%.2fMB limit=%sMB",
             video.file_id,
             file_size / 1024 / 1024,
-            MAX_TG_DOWNLOAD_MB,
+            effective_limit_mb,
         )
-        # 你也可以在这里给自己（管理员）发一条提示消息，告知这条视频没剪辑
+        try:
+            await send_admin_text(
+                context.bot,
+                (
+                    "<b>剪辑跳过：视频过大</b>\n"
+                    f"频道消息ID：<code>{message.message_id}</code>\n"
+                    f"大小：<code>{file_size / 1024 / 1024:.2f}</code> MB\n"
+                    f"限制：<code>{effective_limit_mb}</code> MB\n"
+                    "建议：请单独上传一个 30 秒内的小体积试看视频（<=20MB）用于引流。"
+                ),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
         return
 
     src = os.path.join(DOWNLOAD_DIR, f"{video.file_id}.mp4")
@@ -73,6 +87,20 @@ async def private_channel_video_handler(update: Update, context: ContextTypes.DE
                 video.file_id,
                 exc_info=True,
             )
+            try:
+                await send_admin_text(
+                    context.bot,
+                    (
+                        "<b>剪辑失败：File is too big</b>\n"
+                        f"频道消息ID：<code>{message.message_id}</code>\n"
+                        f"file_id：<code>{video.file_id}</code>\n"
+                        "原因：Telegram Bot API 不支持下载超大文件\n"
+                        "建议：请单独上传一个 30 秒内的小体积试看视频（<=20MB）用于引流。"
+                    ),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
             return
         logger.error(
             "[clipper] get_file 发生 BadRequest file_id=%s err=%s",

@@ -412,6 +412,22 @@ def mark_order_success(order_id: int, tx_id: str):
     cur.close(); conn.close()
 
 
+def get_success_orders_between(start: datetime, end: datetime) -> List[Dict]:
+    conn = get_conn(); cur = conn.cursor(dictionary=True)
+    cur.execute(
+        """
+        SELECT telegram_id, addr, amount, plan_code, tx_id, created_at
+        FROM orders
+        WHERE status='success' AND created_at >= %s AND created_at < %s
+        ORDER BY created_at ASC
+        """,
+        (start, end),
+    )
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return rows
+
+
 def insert_usdt_tx_if_new(
     telegram_id: int | None,
     addr: str,
@@ -434,6 +450,16 @@ def insert_usdt_tx_if_new(
     return inserted
 
 
+def get_address_assigned_at(addr: str) -> datetime | None:
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT assigned_at FROM address_pool WHERE addr=%s", (addr,))
+    row = cur.fetchone()
+    cur.close(); conn.close()
+    if not row:
+        return None
+    return row[0]
+
+
 def get_unassigned_usdt_txs(addr: str, confirm_before: datetime) -> List[Dict]:
     conn = get_conn(); cur = conn.cursor(dictionary=True)
     cur.execute(
@@ -446,6 +472,37 @@ def get_unassigned_usdt_txs(addr: str, confirm_before: datetime) -> List[Dict]:
         """,
         (addr, confirm_before),
     )
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return rows
+
+
+def get_unassigned_usdt_txs_since(addr: str, confirm_before: datetime, since: datetime | None) -> List[Dict]:
+    conn = get_conn(); cur = conn.cursor(dictionary=True)
+    if since:
+        cur.execute(
+            """
+            SELECT *
+            FROM usdt_txs
+            WHERE addr=%s AND status='seen' AND telegram_id IS NULL
+              AND block_time IS NOT NULL
+              AND block_time >= %s AND block_time <= %s
+            ORDER BY block_time ASC, created_at ASC
+            """,
+            (addr, since, confirm_before),
+        )
+    else:
+        cur.execute(
+            """
+            SELECT *
+            FROM usdt_txs
+            WHERE addr=%s AND status='seen' AND telegram_id IS NULL
+              AND block_time IS NOT NULL
+              AND block_time <= %s
+            ORDER BY block_time ASC, created_at ASC
+            """,
+            (addr, confirm_before),
+        )
     rows = cur.fetchall()
     cur.close(); conn.close()
     return rows

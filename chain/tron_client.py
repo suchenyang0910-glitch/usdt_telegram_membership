@@ -83,3 +83,43 @@ def get_usdt_received(addr: str) -> Decimal:
         total += tx["amount"]
 
     return total
+
+
+def get_usdt_balance(addr: str) -> Decimal | None:
+    url = f"https://api.trongrid.io/v1/accounts/{addr}"
+    try:
+        resp = requests.get(url, headers=_headers(), timeout=8)
+    except Exception as e:
+        logger.warning(f"[tron_client] balance 请求失败 addr={addr} err={e}")
+        return None
+    if resp.status_code != 200:
+        logger.warning(f"[tron_client] balance 非200 addr={addr} code={resp.status_code} body={resp.text[:200]}")
+        return None
+    try:
+        data = resp.json()
+    except Exception as e:
+        logger.warning(f"[tron_client] balance JSON解析失败 addr={addr} err={e} body={resp.text[:200]}")
+        return None
+
+    items = data.get("data") or []
+    if not items:
+        return Decimal("0")
+    row = items[0] or {}
+
+    trc20 = row.get("trc20") or []
+    for entry in trc20:
+        if not isinstance(entry, dict):
+            continue
+        if USDT_CONTRACT in entry:
+            try:
+                return Decimal(str(entry[USDT_CONTRACT])) / Decimal("1000000")
+            except Exception:
+                return None
+
+        for k, v in entry.items():
+            if str(k).lower() == str(USDT_CONTRACT).lower():
+                try:
+                    return Decimal(str(v)) / Decimal("1000000")
+                except Exception:
+                    return None
+    return None

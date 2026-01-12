@@ -7,10 +7,17 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from config import BOT_TOKEN, PAID_CHANNEL_ID, AUTO_CLIP_FROM_PAID_CHANNEL
 from core.logging_setup import setup_logging
 from core.models import init_tables
-from bot.handlers import start, plans, invite, on_menu_button, reset_addr, my_id
-from bot.scheduler import check_deposits_job, check_expired_job, check_expiring_job
+from bot.handlers import start, plans, invite, on_menu_button, reset_addr, my_id, diag
+from bot.scheduler import (
+    check_deposits_job,
+    check_expired_job,
+    check_expiring_job,
+    cleanup_logs_job,
+    hourly_admin_report_job,
+)
 from bot.clipper import private_channel_video_handler
 from bot.uploader import build_upload_conversation_handler
+from bot.error_notify import application_error_handler
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +32,11 @@ def main():
     app.add_handler(CommandHandler("plans", plans))
     app.add_handler(CommandHandler("invite", invite))
     app.add_handler(CommandHandler("reset_addr", reset_addr))
+    app.add_handler(CommandHandler("diag", diag))
     app.add_handler(MessageHandler(filters.Regex(r"^(我的ID|我的id|myid|my id)$"), my_id))
     app.add_handler(build_upload_conversation_handler())
     app.add_handler(CallbackQueryHandler(on_menu_button))
+    app.add_error_handler(application_error_handler)
 
     # 监听付费频道的视频消息，用于自动剪辑推送到免费频道
     if AUTO_CLIP_FROM_PAID_CHANNEL:
@@ -42,6 +51,8 @@ def main():
     app.job_queue.run_repeating(check_deposits_job, interval=60, first=10)
     app.job_queue.run_repeating(check_expired_job, interval=3600, first=60)
     app.job_queue.run_repeating(check_expiring_job, interval=3600, first=120)
+    app.job_queue.run_repeating(cleanup_logs_job, interval=21600, first=300)
+    app.job_queue.run_repeating(hourly_admin_report_job, interval=3600, first=600)
 
     logger.info("🚀 Bot is Running — 收款 / 续费 / 踢人 / 剪辑 / 邀请裂变 已开启")
     app.run_polling()

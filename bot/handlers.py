@@ -10,6 +10,10 @@ from config import (
     PLANS,
     BOT_USERNAME,
     ADMIN_USER_IDS,
+    PAID_CHANNEL_ID,
+    HIGHLIGHT_CHANNEL_ID,
+    FREE_CHANNEL_ID_1,
+    FREE_CHANNEL_ID_2,
     PAYMENT_MODE,
     RECEIVE_ADDRESS,
     PAYMENT_SUFFIX_ENABLE,
@@ -79,10 +83,10 @@ def _plans_kb(lang: str) -> InlineKeyboardMarkup:
 
 
 def _pick_payment_amount(base: Decimal) -> Decimal:
-    if PAYMENT_MODE == "single_address" and RECEIVE_ADDRESS:
-        enable = True
-    else:
-        enable = PAYMENT_SUFFIX_ENABLE
+    if PAYMENT_MODE != "single_address" or not RECEIVE_ADDRESS:
+        return base.quantize(Decimal("0.000001"))
+
+    enable = PAYMENT_SUFFIX_ENABLE
 
     if not enable:
         return base.quantize(Decimal("0.000001"))
@@ -225,6 +229,38 @@ async def reset_addr(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
 
+async def diag(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or not _is_admin(user.id):
+        return
+
+    bot = context.bot
+    me = await bot.get_me()
+
+    checks = [
+        ("PAID_CHANNEL_ID", PAID_CHANNEL_ID),
+        ("HIGHLIGHT_CHANNEL_ID", HIGHLIGHT_CHANNEL_ID),
+        ("FREE_CHANNEL_ID_1", FREE_CHANNEL_ID_1),
+        ("FREE_CHANNEL_ID_2", FREE_CHANNEL_ID_2),
+    ]
+
+    lines = [f"bot_id={me.id} username=@{me.username}"]
+    for name, chat_id in checks:
+        try:
+            chat = await bot.get_chat(chat_id)
+            try:
+                member = await bot.get_chat_member(chat_id, me.id)
+                status = getattr(member, "status", None) or "unknown"
+            except Exception as e:
+                status = f"get_chat_member failed: {type(e).__name__}: {e}"
+            lines.append(f"{name}={chat_id} type={chat.type} title={getattr(chat, 'title', '')} status={status}")
+        except Exception as e:
+            lines.append(f"{name}={chat_id} ERROR: {type(e).__name__}: {e}")
+
+    if update.message:
+        await update.message.reply_text("\n".join(lines))
+
+
 async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query:
@@ -283,7 +319,7 @@ async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     addr = None
 
         amount = _pick_payment_amount(base_amount)
-        if addr and PAYMENT_MODE == "single_address" and RECEIVE_ADDRESS:
+        if addr:
             create_pending_order(telegram_id, addr, amount, plan_code)
 
         if lang == "zh":

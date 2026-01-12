@@ -27,6 +27,19 @@ for _x in (os.getenv("ADMIN_USER_IDS", "")).split(","):
 
 AUTO_CLIP_FROM_PAID_CHANNEL = os.getenv("AUTO_CLIP_FROM_PAID_CHANNEL", "0") == "1"
 
+_admin_report_chat_id = os.getenv("ADMIN_REPORT_CHAT_ID", "").strip()
+ADMIN_REPORT_CHAT_ID = int(_admin_report_chat_id) if _admin_report_chat_id else None
+ADMIN_REPORT_ENABLE = os.getenv("ADMIN_REPORT_ENABLE", "1") == "1"
+ADMIN_REPORT_HOURLY = os.getenv("ADMIN_REPORT_HOURLY", "1") == "1"
+
+USERBOT_ENABLE = os.getenv("USERBOT_ENABLE", "0") == "1"
+USERBOT_API_ID = int(os.getenv("USERBOT_API_ID", "0") or 0)
+USERBOT_API_HASH = os.getenv("USERBOT_API_HASH", "").strip()
+USERBOT_STRING_SESSION = os.getenv("USERBOT_STRING_SESSION", "").strip()
+USERBOT_SESSION_NAME = os.getenv("USERBOT_SESSION_NAME", "tmp/userbot/telethon").strip()
+USERBOT_CLIP_SECONDS = int(os.getenv("USERBOT_CLIP_SECONDS", str(CLIP_SECONDS)))
+USERBOT_CLIP_RANDOM = os.getenv("USERBOT_CLIP_RANDOM", "1" if CLIP_RANDOM else "0") == "1"
+
 # 10 个 USDT-TRC20 收款地址（替换成你的地址）
 _DEFAULT_USDT_ADDRESS_POOL = [
     "TWAVjpfcdH68wQPFFnzrDPdZPAHhr7RAr2",
@@ -97,3 +110,4 @@ RUNTIME_LOG_FILE = os.getenv("RUNTIME_LOG_FILE", "logs/runtime.log")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", str(10 * 1024 * 1024)))
 LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "10"))
+LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "3"))

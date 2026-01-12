@@ -11,6 +11,10 @@ ARG INSTALL_MEDIA=0
 COPY requirements-media.txt /app/requirements-media.txt
 RUN if [ "$INSTALL_MEDIA" = "1" ]; then pip install --no-cache-dir -r /app/requirements-media.txt; fi
 
+ARG INSTALL_USERBOT=0
+COPY requirements-userbot.txt /app/requirements-userbot.txt
+RUN if [ "$INSTALL_USERBOT" = "1" ]; then pip install --no-cache-dir -r /app/requirements-userbot.txt; fi
+
 COPY . /app
 
 ENV PYTHONUNBUFFERED=1
