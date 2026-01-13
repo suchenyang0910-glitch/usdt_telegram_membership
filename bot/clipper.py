@@ -15,8 +15,7 @@ from config import (
     CLIP_SECONDS,
     CLIP_RANDOM,
     SEND_RETRY,
-    FREE_CHANNEL_ID_1,
-    FREE_CHANNEL_ID_2,
+    FREE_CHANNEL_IDS,
     HIGHLIGHT_CHANNEL_ID,
     MAX_TG_DOWNLOAD_MB,
 )
@@ -166,7 +165,7 @@ async def private_channel_video_handler(update: Update, context: ContextTypes.DE
     caption = highlight_caption()
 
     targets = []
-    for ch in (HIGHLIGHT_CHANNEL_ID, FREE_CHANNEL_ID_1, FREE_CHANNEL_ID_2):
+    for ch in ([HIGHLIGHT_CHANNEL_ID] + list(FREE_CHANNEL_IDS)):
         if ch and ch not in targets:
             targets.append(ch)
 

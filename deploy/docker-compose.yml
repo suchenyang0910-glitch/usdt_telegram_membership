@@ -32,6 +32,25 @@ services:
     tty: true
     restart: unless-stopped
 
+  admin:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        INSTALL_MEDIA: "0"
+    env_file:
+      - ../.env
+    volumes:
+      - ../logs:/app/logs
+      - ../tmp:/app/tmp
+    ports:
+      - "0.0.0.0:8080:8080"
+    command: ["bash","-lc","python admin_web.py"]
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+
   mysql:
     image: mysql:8.0
     env_file:

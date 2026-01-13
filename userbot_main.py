@@ -13,8 +13,7 @@ from bot.captions import highlight_caption
 from config import (
     ADMIN_REPORT_CHAT_ID,
     ADMIN_USER_IDS,
-    FREE_CHANNEL_ID_1,
-    FREE_CHANNEL_ID_2,
+    FREE_CHANNEL_IDS,
     HIGHLIGHT_CHANNEL_ID,
     PAID_CHANNEL_ID,
     USERBOT_API_HASH,
@@ -132,7 +131,7 @@ def _save_state(ids: set[int]):
 
 def _clip_targets() -> list[int]:
     targets = []
-    for ch in (HIGHLIGHT_CHANNEL_ID, FREE_CHANNEL_ID_1, FREE_CHANNEL_ID_2):
+    for ch in ([HIGHLIGHT_CHANNEL_ID] + list(FREE_CHANNEL_IDS)):
         if ch and ch not in targets:
             targets.append(ch)
     return targets

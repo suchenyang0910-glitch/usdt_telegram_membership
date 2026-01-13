@@ -15,6 +15,25 @@ FREE_CHANNEL_ID_1 = int(os.getenv("FREE_CHANNEL_ID_1", "-1003257652639")) # 免�
 FREE_CHANNEL_ID_2 = int(os.getenv("FREE_CHANNEL_ID_2", "-1003257652639")) # 免费频道 2（可选）
 HIGHLIGHT_CHANNEL_ID = int(os.getenv("HIGHLIGHT_CHANNEL_ID", str(FREE_CHANNEL_ID_1)))
 
+FREE_CHANNEL_IDS: list[int] = []
+_free_ids_env = os.getenv("FREE_CHANNEL_IDS", "").strip()
+if _free_ids_env:
+    _free_ids_env = _free_ids_env.replace("\n", ",")
+    for _x in _free_ids_env.split(","):
+        _x = _x.strip()
+        if not _x:
+            continue
+        try:
+            _id = int(_x)
+        except Exception:
+            continue
+        if _id and _id not in FREE_CHANNEL_IDS:
+            FREE_CHANNEL_IDS.append(_id)
+else:
+    for _id in (FREE_CHANNEL_ID_1, FREE_CHANNEL_ID_2):
+        if _id and _id not in FREE_CHANNEL_IDS:
+            FREE_CHANNEL_IDS.append(_id)
+
 ADMIN_USER_IDS = []
 for _x in (os.getenv("ADMIN_USER_IDS", "")).split(","):
     _x = _x.strip()
@@ -31,7 +50,7 @@ _admin_report_chat_id = os.getenv("ADMIN_REPORT_CHAT_ID", "").strip()
 ADMIN_REPORT_CHAT_ID = int(_admin_report_chat_id) if _admin_report_chat_id else None
 ADMIN_REPORT_ENABLE = os.getenv("ADMIN_REPORT_ENABLE", "1") == "1"
 ADMIN_REPORT_HOURLY = os.getenv("ADMIN_REPORT_HOURLY", "1") == "1"
-ADMIN_REPORT_TZ_OFFSET = int(os.getenv("ADMIN_REPORT_TZ_OFFSET", "8"))
+ADMIN_REPORT_TZ_OFFSET = int(os.getenv("ADMIN_REPORT_TZ_OFFSET", "7"))
 ADMIN_REPORT_QUIET_START_HOUR = int(os.getenv("ADMIN_REPORT_QUIET_START_HOUR", "22"))
 ADMIN_REPORT_QUIET_END_HOUR = int(os.getenv("ADMIN_REPORT_QUIET_END_HOUR", "8"))
 
@@ -105,6 +124,12 @@ USERBOT_CLIP_SECONDS = int(os.getenv("USERBOT_CLIP_SECONDS", str(CLIP_SECONDS)))
 USERBOT_CLIP_RANDOM = os.getenv("USERBOT_CLIP_RANDOM", "1" if CLIP_RANDOM else "0") == "1"
 _userbot_notify_chat_id = os.getenv("USERBOT_NOTIFY_CHAT_ID", "").strip()
 USERBOT_NOTIFY_CHAT_ID = int(_userbot_notify_chat_id) if _userbot_notify_chat_id else None
+
+ADMIN_WEB_ENABLE = os.getenv("ADMIN_WEB_ENABLE", "0") == "1"
+ADMIN_WEB_HOST = os.getenv("ADMIN_WEB_HOST", "0.0.0.0").strip()
+ADMIN_WEB_PORT = int(os.getenv("ADMIN_WEB_PORT", "8080"))
+ADMIN_WEB_USER = os.getenv("ADMIN_WEB_USER", "").strip()
+ADMIN_WEB_PASS = os.getenv("ADMIN_WEB_PASS", "").strip()
 
 # 邀请奖励（按套餐 code 区分）
 INVITE_REWARD = {

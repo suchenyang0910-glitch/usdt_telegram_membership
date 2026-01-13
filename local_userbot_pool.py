@@ -3,12 +3,14 @@ import json
 import os
 import shutil
 import logging
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 import time
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+from telethon.errors import FileReferenceExpiredError
 
 logger = logging.getLogger("local_userbot")
 
@@ -32,6 +34,11 @@ class Settings:
     restart_backoff_max_sec: int
     max_clients: int
     download_timeout_sec: int
+    fetch_limit: int
+    validate_media: bool
+    transcode_h264: bool
+    ffprobe_bin: str
+    ffmpeg_bin: str
 
 
 def _env_int(name: str, default: int) -> int:
@@ -82,6 +89,11 @@ def load_settings() -> Settings:
     restart_backoff_max_sec = _env_int("LOCAL_USERBOT_RESTART_BACKOFF_MAX_SEC", 300)
     max_clients = _env_int("LOCAL_USERBOT_MAX_CLIENTS", 5)
     download_timeout_sec = _env_int("LOCAL_USERBOT_DOWNLOAD_TIMEOUT_SEC", 900)
+    fetch_limit = _env_int("LOCAL_USERBOT_FETCH_LIMIT", 50)
+    validate_media = os.getenv("LOCAL_USERBOT_VALIDATE_MEDIA", "1").strip() == "1"
+    transcode_h264 = os.getenv("LOCAL_USERBOT_TRANSCODE_H264", "0").strip() == "1"
+    ffprobe_bin = os.getenv("LOCAL_USERBOT_FFPROBE_BIN", "ffprobe").strip()
+    ffmpeg_bin = os.getenv("LOCAL_USERBOT_FFMPEG_BIN", "ffmpeg").strip()
 
     upload_dir = os.getenv("LOCAL_USERBOT_UPLOAD_DIR", os.path.join(root, "upload_queue")).strip()
     uploaded_dir = os.getenv("LOCAL_USERBOT_UPLOADED_DIR", os.path.join(root, "uploaded")).strip()
@@ -114,6 +126,11 @@ def load_settings() -> Settings:
         restart_backoff_max_sec=max(restart_backoff_min_sec, restart_backoff_max_sec),
         max_clients=max(1, max_clients),
         download_timeout_sec=max(60, download_timeout_sec),
+        fetch_limit=max(10, min(500, fetch_limit)),
+        validate_media=validate_media,
+        transcode_h264=transcode_h264,
+        ffprobe_bin=ffprobe_bin or "ffprobe",
+        ffmpeg_bin=ffmpeg_bin or "ffmpeg",
     )
 
 
@@ -232,6 +249,102 @@ def _is_video_file(name: str) -> bool:
     n = name.lower()
     return n.endswith((".mp4", ".mkv", ".mov", ".webm", ".m4v", ".avi"))
 
+def _run_cmd(cmd: list[str], timeout_sec: int) -> tuple[int, str]:
+    try:
+        res = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_sec,
+        )
+        out = (res.stdout or "") + (("\n" + res.stderr) if res.stderr else "")
+        return int(res.returncode), out.strip()
+    except Exception as e:
+        return 99, f"{type(e).__name__}: {e}"
+
+
+def _ffprobe_video_codec(ffprobe_bin: str, file_path: str) -> tuple[bool, str]:
+    rc, out = _run_cmd(
+        [
+            ffprobe_bin,
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_streams",
+            "-show_format",
+            file_path,
+        ],
+        timeout_sec=15,
+    )
+    if rc != 0:
+        if "FileNotFoundError" in out or "No such file or directory" in out:
+            return True, "unknown"
+        return False, f"ffprobe failed: {out[:200]}"
+    try:
+        data = json.loads(out or "{}")
+        streams = data.get("streams") or []
+        vstreams = [s for s in streams if (s.get("codec_type") == "video")]
+        if not vstreams:
+            return False, "no video stream"
+        codec = (vstreams[0].get("codec_name") or "").lower()
+        return True, codec
+    except Exception as e:
+        return False, f"ffprobe parse failed: {type(e).__name__}: {e}"
+
+
+def _transcode_to_h264(ffmpeg_bin: str, src: str) -> tuple[bool, str]:
+    dst = os.path.splitext(src)[0] + "_h264.mp4"
+    rc, out = _run_cmd(
+        [
+            ffmpeg_bin,
+            "-y",
+            "-i",
+            src,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
+            dst,
+        ],
+        timeout_sec=3600,
+    )
+    if rc != 0 or not os.path.exists(dst):
+        try:
+            if os.path.exists(dst):
+                os.remove(dst)
+        except Exception:
+            pass
+        return False, out[:300]
+    try:
+        os.remove(src)
+    except Exception:
+        pass
+    return True, dst
+
+
+def _list_video_files(folder: str) -> list[str]:
+    out = []
+    try:
+        for name in os.listdir(folder):
+            fp = os.path.join(folder, name)
+            if os.path.isfile(fp) and _is_video_file(name):
+                out.append(fp)
+    except Exception:
+        return []
+    out.sort(key=lambda p: os.path.getsize(p) if os.path.exists(p) else 0, reverse=True)
+    return out
+
+
 def _is_media_message(msg) -> bool:
     try:
         if getattr(msg, "video", None):
@@ -278,19 +391,29 @@ def _pick_downloaded_media_path(folder: str) -> str | None:
 
 async def _download_many(
     client: TelegramClient,
+    channel_id: int,
     messages: list,
     base_dir: str,
     timeout_sec: int,
-) -> tuple[bool, str, int, int]:
+) -> tuple[bool, str, int, int, list[int], list[int], list[int], str]:
     if not messages:
-        return False, "empty group", 0, 0
+        return False, "empty group", 0, 0, [], [], [], "empty group"
 
-    rep_id = min(int(getattr(m, "id", 0) or 0) for m in messages)
+    ids = sorted({int(getattr(m, "id", 0) or 0) for m in messages if int(getattr(m, "id", 0) or 0)})
+    rep_id = min(ids) if ids else 0
     folder = os.path.join(base_dir, _folder_name(datetime.now(), rep_id))
     _ensure_dir(folder)
 
+    try:
+        refreshed = await client.get_messages(channel_id, ids=ids)
+        if not isinstance(refreshed, list):
+            refreshed = [refreshed] if refreshed else []
+        refreshed = [m for m in refreshed if m]
+    except Exception:
+        refreshed = list(messages)
+
     texts = []
-    for m in messages:
+    for m in refreshed:
         t = (getattr(m, "message", None) or "").strip()
         if t:
             texts.append(t)
@@ -302,8 +425,13 @@ async def _download_many(
 
     images = 0
     videos = 0
+    succeeded_ids: list[int] = []
+    skipped_ids: list[int] = []
+    failed_ids: list[int] = []
+    fail_reason = ""
     try:
-        for m in sorted(messages, key=lambda x: int(getattr(x, "id", 0) or 0)):
+        for m in sorted(refreshed, key=lambda x: int(getattr(x, "id", 0) or 0)):
+            mid = int(getattr(m, "id", 0) or 0)
             expect_size = int(getattr(getattr(m, "file", None), "size", None) or 0)
             is_video = bool(getattr(m, "video", None))
             if not is_video:
@@ -316,27 +444,58 @@ async def _download_many(
                 mime = (getattr(f, "mime_type", None) or "").lower()
                 is_photo = mime.startswith("image/")
 
-            fp = await asyncio.wait_for(client.download_media(m, file=folder), timeout=float(timeout_sec))
-            if fp and isinstance(fp, str) and os.path.exists(fp) and expect_size:
+            downloaded_path = None
+            for attempt in range(2):
                 try:
-                    actual = os.path.getsize(fp)
+                    downloaded_path = await asyncio.wait_for(client.download_media(m, file=folder), timeout=float(timeout_sec))
+                    break
+                except FileReferenceExpiredError:
+                    try:
+                        refreshed_one = await client.get_messages(channel_id, ids=mid)
+                        if refreshed_one:
+                            m = refreshed_one
+                    except Exception:
+                        pass
+                    continue
+
+            if not downloaded_path:
+                skipped_ids.append(mid)
+                continue
+
+            if isinstance(downloaded_path, str) and os.path.exists(downloaded_path) and expect_size:
+                try:
+                    actual = os.path.getsize(downloaded_path)
                 except Exception:
                     actual = 0
                 if actual and actual < int(expect_size * 0.95):
-                    raise RuntimeError(f"size mismatch expect={expect_size} actual={actual}")
+                    failed_ids.append(mid)
+                    fail_reason = f"size mismatch expect={expect_size} actual={actual}"
+                    continue
+
+            succeeded_ids.append(mid)
             if is_video:
                 videos += 1
             elif is_photo:
                 images += 1
+
         if not _pick_downloaded_media_path(folder):
-            raise RuntimeError("no media files")
-        return True, folder, images, videos
+            fail_reason = "no media files"
+            return False, folder, images, videos, succeeded_ids, skipped_ids, failed_ids, fail_reason
+
+        if failed_ids:
+            return False, folder, images, videos, succeeded_ids, skipped_ids, failed_ids, (fail_reason or "some files invalid")
+
+        if not succeeded_ids and skipped_ids:
+            return False, folder, images, videos, succeeded_ids, skipped_ids, failed_ids, "all media skipped (file reference expired)"
+
+        return True, folder, images, videos, succeeded_ids, skipped_ids, failed_ids, ""
+
     except asyncio.TimeoutError:
         try:
             shutil.rmtree(folder, ignore_errors=True)
         except Exception:
             pass
-        return False, "download timeout", images, videos
+        return False, "download timeout", images, videos, succeeded_ids, skipped_ids, failed_ids, "download timeout"
     except asyncio.CancelledError:
         raise
     except Exception as e:
@@ -344,7 +503,51 @@ async def _download_many(
             shutil.rmtree(folder, ignore_errors=True)
         except Exception:
             pass
-        return False, f"download failed: {type(e).__name__}: {e}", images, videos
+        return False, f"download failed: {type(e).__name__}: {e}", images, videos, succeeded_ids, skipped_ids, failed_ids, str(e)
+
+
+def _validate_and_fix_videos(s: Settings, folder: str) -> tuple[bool, str, int]:
+    videos = _list_video_files(folder)
+    if not videos:
+        return True, "", 0
+
+    transcoded = 0
+    for fp in videos:
+        ok, codec_or_err = _ffprobe_video_codec(s.ffprobe_bin, fp)
+        if not ok:
+            return False, f"{os.path.basename(fp)} invalid: {codec_or_err}", transcoded
+        codec = codec_or_err
+        if s.transcode_h264 and codec in ("hevc", "h265", "av1"):
+            ok2, out2 = _transcode_to_h264(s.ffmpeg_bin, fp)
+            if not ok2:
+                return False, f"transcode failed: {os.path.basename(fp)} {out2}", transcoded
+            transcoded += 1
+    return True, "", transcoded
+
+
+async def _download_many_with_postcheck(
+    client: TelegramClient,
+    channel_id: int,
+    messages: list,
+    base_dir: str,
+    timeout_sec: int,
+    settings: Settings,
+) -> tuple[bool, str, int, int, list[int], list[int], list[int], str, int]:
+    ok, info, images, videos, ok_ids, skipped_ids, failed_ids, reason = await _download_many(
+        client, channel_id, messages, base_dir, timeout_sec
+    )
+    if not ok:
+        return ok, info, images, videos, ok_ids, skipped_ids, failed_ids, reason, 0
+    if not settings.validate_media:
+        return ok, info, images, videos, ok_ids, skipped_ids, failed_ids, reason, 0
+    ok2, err2, transcoded = _validate_and_fix_videos(settings, info)
+    if not ok2:
+        try:
+            shutil.rmtree(info, ignore_errors=True)
+        except Exception:
+            pass
+        return False, info, images, videos, ok_ids, skipped_ids, failed_ids, err2, transcoded
+    return ok, info, images, videos, ok_ids, skipped_ids, failed_ids, reason, transcoded
 
 
 async def download_loop(clients: list[TelegramClient], s: Settings):
@@ -358,7 +561,13 @@ async def download_loop(clients: list[TelegramClient], s: Settings):
         try:
             head = clients[0]
             await notifier.send("开始匹配频道资源")
-            msgs = await head.get_messages(s.download_channel_id, limit=50)
+            try:
+                msgs = await head.get_messages(s.download_channel_id, limit=int(s.fetch_limit))
+            except Exception as e:
+                logger.warning("get_messages failed: %s: %s", type(e).__name__, e)
+                await notifier.send(f"匹配频道资源失败：{type(e).__name__}: {e}")
+                await asyncio.sleep(max(60, s.poll_minutes * 60))
+                continue
             groups: dict[int, list] = {}
             for m in msgs:
                 if not m or not getattr(m, "file", None):
@@ -374,6 +583,11 @@ async def download_loop(clients: list[TelegramClient], s: Settings):
                 if any(mid and mid not in downloaded for mid in ids):
                     todo_groups.append((key, items))
             todo_groups.sort(key=lambda x: min(int(getattr(m, "id", 0) or 0) for m in x[1]))
+
+            media_msgs = sum(len(v) for v in groups.values())
+            await notifier.send(
+                f"匹配完成：拉取{len(msgs)}条，媒体{media_msgs}条，分组{len(groups)}组，待下载{len(todo_groups)}组"
+            )
 
             for idx, (_, items) in enumerate(todo_groups):
                 c = clients[idx % len(clients)]
@@ -393,19 +607,45 @@ async def download_loop(clients: list[TelegramClient], s: Settings):
                     cap = ""
                 await notifier.send(f"开始下载：{title}\n文案：{cap[:800]}")
                 t0 = time.time()
-                ok, info, images, videos = await _download_many(c, items, base_dir, s.download_timeout_sec)
+                ok, info, images, videos, ok_ids, skipped_ids, failed_ids, reason, transcoded = await _download_many_with_postcheck(
+                    c, s.download_channel_id, items, base_dir, s.download_timeout_sec, s
+                )
                 dt = time.time() - t0
                 if ok:
-                    for m in items:
-                        mid = int(getattr(m, "id", 0) or 0)
+                    for mid in ok_ids + skipped_ids:
                         if mid:
-                            downloaded.add(mid)
+                            downloaded.add(int(mid))
                     _save_state(s.state_file, downloaded)
-                    logger.info("download ok title=%s path=%s cost=%.1fs images=%s videos=%s", title, info, dt, images, videos)
-                    await notifier.send(f"完成下载：{title}\n用时：{dt:.1f}s\n图片：{images} 视频：{videos}\n路径：{info}")
+                    logger.info(
+                        "download ok title=%s path=%s cost=%.1fs images=%s videos=%s skipped=%s",
+                        title,
+                        info,
+                        dt,
+                        images,
+                        videos,
+                        len(skipped_ids),
+                    )
+                    skipped_line = f"\n跳过：{len(skipped_ids)}" if skipped_ids else ""
+                    transcoded_line = f"\n转码：{transcoded}" if transcoded else ""
+                    await notifier.send(
+                        f"完成下载：{title}\n用时：{dt:.1f}s\n图片：{images} 视频：{videos}{skipped_line}{transcoded_line}\n路径：{info}"
+                    )
                 else:
-                    logger.warning("download failed title=%s cost=%.1fs err=%s", title, dt, info)
-                    await notifier.send(f"下载失败：{title}\n用时：{dt:.1f}s\n原因：{info}")
+                    if reason == "all media skipped (file reference expired)":
+                        for mid in ok_ids + skipped_ids:
+                            if mid:
+                                downloaded.add(int(mid))
+                        _save_state(s.state_file, downloaded)
+                        logger.warning("download skipped all title=%s cost=%.1fs ids=%s", title, dt, len(skipped_ids))
+                        await notifier.send(f"下载跳过（媒体不可下载/已过期）：{title}\n用时：{dt:.1f}s\n跳过：{len(skipped_ids)}")
+                        continue
+                    if isinstance(info, str) and os.path.isdir(info):
+                        try:
+                            shutil.rmtree(info, ignore_errors=True)
+                        except Exception:
+                            pass
+                    logger.warning("download failed title=%s cost=%.1fs err=%s", title, dt, (reason or info))
+                    await notifier.send(f"下载失败：{title}\n用时：{dt:.1f}s\n原因：{reason or info}")
                     await asyncio.sleep(2)
         except Exception:
             logger.exception("download_loop error")

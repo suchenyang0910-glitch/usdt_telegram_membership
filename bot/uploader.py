@@ -18,6 +18,7 @@ from config import (
     ADMIN_USER_IDS,
     PAID_CHANNEL_ID,
     HIGHLIGHT_CHANNEL_ID,
+    FREE_CHANNEL_IDS,
     DOWNLOAD_DIR,
     CLIP_DIR,
     CLIP_SECONDS,
@@ -168,19 +169,26 @@ async def upload_receive_media(update: Update, context: ContextTypes.DEFAULT_TYP
 
     caption_text = highlight_caption()
     highlight_msg = None
-    for i in range(SEND_RETRY):
-        try:
-            with open(dst, "rb") as f:
-                highlight_msg = await context.bot.send_video(
-                    chat_id=HIGHLIGHT_CHANNEL_ID,
-                    video=f,
-                    caption=caption_text,
-                )
-            break
-        except Exception as e:
-            if i == SEND_RETRY - 1:
-                await msg.reply_text(f"引流频道发布失败：{e}")
-            continue
+    targets = []
+    for ch in ([HIGHLIGHT_CHANNEL_ID] + list(FREE_CHANNEL_IDS)):
+        if ch and ch not in targets:
+            targets.append(ch)
+
+    for ch in targets:
+        sent = None
+        last_err = None
+        for i in range(SEND_RETRY):
+            try:
+                with open(dst, "rb") as f:
+                    sent = await context.bot.send_video(chat_id=ch, video=f, caption=caption_text)
+                break
+            except Exception as e:
+                last_err = e
+                continue
+        if ch == HIGHLIGHT_CHANNEL_ID:
+            highlight_msg = sent
+        if sent is None and last_err is not None and ch == HIGHLIGHT_CHANNEL_ID:
+            await msg.reply_text(f"引流频道发布失败：{last_err}")
 
     try:
         os.remove(src)
