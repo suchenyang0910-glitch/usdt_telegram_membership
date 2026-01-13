@@ -28,6 +28,7 @@ from bot.scheduler import (
     cleanup_logs_job,
     hourly_admin_report_job,
     cleanup_downloads_job,
+    health_alert_job,
 )
 from bot.clipper import private_channel_video_handler
 from bot.uploader import build_upload_conversation_handler
@@ -72,6 +73,7 @@ def main():
     app.job_queue.run_repeating(check_expiring_job, interval=3600, first=120)
     app.job_queue.run_repeating(cleanup_logs_job, interval=21600, first=300)
     app.job_queue.run_repeating(hourly_admin_report_job, interval=3600, first=600)
+    app.job_queue.run_repeating(health_alert_job, interval=300, first=120)
     app.job_queue.run_daily(cleanup_downloads_job, time=time(hour=3, minute=0))
 
     logger.info("🚀 Bot is Running — 收款 / 续费 / 踢人 / 剪辑 / 邀请裂变 已开启")

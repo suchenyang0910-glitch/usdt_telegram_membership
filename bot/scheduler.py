@@ -19,6 +19,9 @@ from config import (
     ADMIN_REPORT_TZ_OFFSET,
     ADMIN_REPORT_QUIET_START_HOUR,
     ADMIN_REPORT_QUIET_END_HOUR,
+    HEALTH_ALERT_ENABLE,
+    HEALTH_ALERT_DEPOSIT_STALE_MINUTES,
+    HEALTH_ALERT_MIN_INTERVAL_MINUTES,
 )
 from core.models import (
     get_all_users,
@@ -48,6 +51,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 _last_overnight_report_local_date = None
+_last_health_alert_ts = None
 
 async def cleanup_downloads_job(context: ContextTypes.DEFAULT_TYPE):
     roots = [
@@ -403,3 +407,59 @@ async def check_expiring_job(context: ContextTypes.DEFAULT_TYPE):
                 mark_user_reminded(telegram_id, col, now)
             except Exception as e:
                 logger.warning(f"[check_expiring] 提醒失败 uid={telegram_id}: {e}")
+
+
+async def health_alert_job(context: ContextTypes.DEFAULT_TYPE):
+    if not HEALTH_ALERT_ENABLE:
+        return
+    bot = context.bot
+    global _last_health_alert_ts
+
+    conn = None
+    try:
+        from core.db import get_conn
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT MAX(processed_at) FROM usdt_txs WHERE status IN ('processed','credited')")
+        row = cur.fetchone()
+        cur.close()
+    except Exception as e:
+        try:
+            await send_admin_text(bot, f"<b>健康告警：DB 异常</b>\nerr=<code>{type(e).__name__}: {e}</code>", parse_mode="HTML")
+        except Exception:
+            pass
+        return
+    finally:
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+
+    last_at = row[0] if row else None
+    if not last_at:
+        return
+    now = datetime.utcnow()
+    stale_minutes = (now - last_at).total_seconds() / 60.0
+    if stale_minutes < float(HEALTH_ALERT_DEPOSIT_STALE_MINUTES):
+        return
+
+    if _last_health_alert_ts:
+        gap = (now - _last_health_alert_ts).total_seconds() / 60.0
+        if gap < float(HEALTH_ALERT_MIN_INTERVAL_MINUTES):
+            return
+
+    _last_health_alert_ts = now
+    try:
+        await send_admin_text(
+            bot,
+            (
+                "<b>健康告警：入账延迟</b>\n"
+                f"最后入账：<code>{last_at.strftime('%Y-%m-%d %H:%M:%S UTC')}</code>\n"
+                f"延迟分钟：<code>{stale_minutes:.1f}</code>"
+            ),
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass

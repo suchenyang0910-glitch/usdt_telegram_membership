@@ -105,6 +105,21 @@ def init_tables():
         """
     )
 
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_audit (
+            id           BIGINT AUTO_INCREMENT PRIMARY KEY,
+            actor        VARCHAR(128) NOT NULL,
+            action       VARCHAR(64) NOT NULL,
+            target_id    BIGINT NULL,
+            payload      JSON NULL,
+            created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_admin_audit_action_time (action, created_at),
+            INDEX idx_admin_audit_target_time (target_id, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+    )
+
     conn.commit()
 
     _ensure_columns(
