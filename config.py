@@ -61,6 +61,9 @@ SUPPORT_ENABLE = os.getenv("SUPPORT_ENABLE", "0") == "1"
 _support_group_id = os.getenv("SUPPORT_GROUP_ID", "").strip()
 SUPPORT_GROUP_ID = int(_support_group_id) if _support_group_id else None
 
+JOIN_REQUEST_ENABLE = os.getenv("JOIN_REQUEST_ENABLE", "0") == "1"
+JOIN_REQUEST_LINK_EXPIRE_HOURS = int(os.getenv("JOIN_REQUEST_LINK_EXPIRE_HOURS", "24"))
+
 # 10 个 USDT-TRC20 收款地址（替换成你的地址）
 _DEFAULT_USDT_ADDRESS_POOL = [
     "TWAVjpfcdH68wQPFFnzrDPdZPAHhr7RAr2",
@@ -103,9 +106,9 @@ DB_NAME = os.getenv("DB_NAME", "usdt_membership")
 
 # 会员套餐
 PLANS = [
-    {"code": "yearly",  "name": "年度会员", "price": Decimal("79.99"), "days": 365},
-    {"code": "quarter", "name": "季度会员", "price": Decimal("19.99"), "days": 90},
-    {"code": "monthly", "name": "月度会员", "price": Decimal("9.99"),  "days": 30},
+    {"code": "yearly",  "name": "年度会员", "price": Decimal("15.99"), "days": 365},
+    {"code": "quarter", "name": "季度会员", "price": Decimal("3.99"), "days": 90},
+    {"code": "monthly", "name": "月度会员", "price": Decimal("1.99"),  "days": 30},
 ]
 
 AMOUNT_EPS = Decimal("0.000001")  # 金额容差

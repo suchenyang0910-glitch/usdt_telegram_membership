@@ -49,9 +49,9 @@ def _main_menu_kb(lang: str) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
             [
                 [
-                    InlineKeyboardButton("⚡️ 月费 9.99", callback_data="pay_monthly"),
-                    InlineKeyboardButton("⚡️ 季度 19.99", callback_data="pay_quarter"),
-                    InlineKeyboardButton("⚡️ 年费 79.99", callback_data="pay_yearly"),
+                    InlineKeyboardButton("⚡️ 月费 1.99", callback_data="pay_monthly"),
+                    InlineKeyboardButton("⚡️ 季度 3.99", callback_data="pay_quarter"),
+                    InlineKeyboardButton("⚡️ 年费 15.99", callback_data="pay_yearly"),
                 ],
                 [InlineKeyboardButton("📅 我的会员", callback_data="menu_status")],
                 [InlineKeyboardButton("🎁 邀请赚钱", callback_data="menu_invite")],
@@ -60,9 +60,9 @@ def _main_menu_kb(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("Monthly 9.99", callback_data="pay_monthly"),
-                InlineKeyboardButton("Quarter 19.99", callback_data="pay_quarter"),
-                InlineKeyboardButton("Yearly 79.99", callback_data="pay_yearly"),
+                InlineKeyboardButton("Monthly 1.99", callback_data="pay_monthly"),
+                InlineKeyboardButton("Quarter 3.99", callback_data="pay_quarter"),
+                InlineKeyboardButton("Yearly 15.99", callback_data="pay_yearly"),
             ],
             [InlineKeyboardButton("📅 My Membership", callback_data="menu_status")],
             [InlineKeyboardButton("🎁 Invite", callback_data="menu_invite")],
@@ -74,17 +74,17 @@ def _plans_kb(lang: str) -> InlineKeyboardMarkup:
     if lang == "zh":
         return InlineKeyboardMarkup(
             [
-                [InlineKeyboardButton("⚡️ 月费 9.99", callback_data="pay_monthly")],
-                [InlineKeyboardButton("⚡️ 季度 19.99", callback_data="pay_quarter")],
-                [InlineKeyboardButton("⚡️ 年费 79.99", callback_data="pay_yearly")],
+                [InlineKeyboardButton("⚡️ 月费 1.99", callback_data="pay_monthly")],
+                [InlineKeyboardButton("⚡️ 季度 3.99", callback_data="pay_quarter")],
+                [InlineKeyboardButton("⚡️ 年费 15.99", callback_data="pay_yearly")],
                 [InlineKeyboardButton("⬅️ 返回", callback_data="menu_home")],
             ]
         )
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("Monthly 9.99", callback_data="pay_monthly")],
-            [InlineKeyboardButton("Quarter 19.99", callback_data="pay_quarter")],
-            [InlineKeyboardButton("Yearly 79.99", callback_data="pay_yearly")],
+            [InlineKeyboardButton("Monthly 1.99", callback_data="pay_monthly")],
+            [InlineKeyboardButton("Quarter 3.99", callback_data="pay_quarter")],
+            [InlineKeyboardButton("Yearly 15.99", callback_data="pay_yearly")],
             [InlineKeyboardButton("⬅️ Back", callback_data="menu_home")],
         ]
     )

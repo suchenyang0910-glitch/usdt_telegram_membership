@@ -2,7 +2,7 @@
 import logging
 from datetime import time
 
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ChatJoinRequestHandler, filters
 
 from config import BOT_TOKEN, PAID_CHANNEL_ID, AUTO_CLIP_FROM_PAID_CHANNEL
 from core.logging_setup import setup_logging
@@ -33,6 +33,7 @@ from bot.scheduler import (
 from bot.clipper import private_channel_video_handler
 from bot.uploader import build_upload_conversation_handler
 from bot.error_notify import application_error_handler
+from bot.join_requests import paid_channel_join_request
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ def main():
     app.add_handler(build_upload_conversation_handler())
     app.add_handler(CallbackQueryHandler(support_reply_button, pattern=r"^support_reply:", block=False))
     app.add_handler(CallbackQueryHandler(on_menu_button))
+    app.add_handler(ChatJoinRequestHandler(paid_channel_join_request))
     app.add_error_handler(application_error_handler)
 
     # 监听付费频道的视频消息，用于自动剪辑推送到免费频道

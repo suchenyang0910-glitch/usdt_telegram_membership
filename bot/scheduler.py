@@ -22,6 +22,8 @@ from config import (
     HEALTH_ALERT_ENABLE,
     HEALTH_ALERT_DEPOSIT_STALE_MINUTES,
     HEALTH_ALERT_MIN_INTERVAL_MINUTES,
+    JOIN_REQUEST_ENABLE,
+    JOIN_REQUEST_LINK_EXPIRE_HOURS,
 )
 from core.models import (
     get_all_users,
@@ -217,11 +219,19 @@ async def check_deposits_job(context: ContextTypes.DEFAULT_TYPE):
 
             lang = user.get("language") or "en"
             try:
-                invite_link = await bot.create_chat_invite_link(
-                    chat_id=PAID_CHANNEL_ID,
-                    expire_date=int(new_paid_until.timestamp()),
-                    member_limit=1,
-                )
+                if JOIN_REQUEST_ENABLE:
+                    expire_ts = int((datetime.utcnow() + timedelta(hours=int(JOIN_REQUEST_LINK_EXPIRE_HOURS))).timestamp())
+                    invite_link = await bot.create_chat_invite_link(
+                        chat_id=PAID_CHANNEL_ID,
+                        expire_date=expire_ts,
+                        creates_join_request=True,
+                    )
+                else:
+                    invite_link = await bot.create_chat_invite_link(
+                        chat_id=PAID_CHANNEL_ID,
+                        expire_date=int(new_paid_until.timestamp()),
+                        member_limit=1,
+                    )
                 msg = t(
                     lang,
                     "success_payment",
@@ -324,11 +334,19 @@ async def check_deposits_job(context: ContextTypes.DEFAULT_TYPE):
                 pass
 
             try:
-                invite_link = await bot.create_chat_invite_link(
-                    chat_id=PAID_CHANNEL_ID,
-                    expire_date=int(new_paid_until.timestamp()),
-                    member_limit=1,
-                )
+                if JOIN_REQUEST_ENABLE:
+                    expire_ts = int((datetime.utcnow() + timedelta(hours=int(JOIN_REQUEST_LINK_EXPIRE_HOURS))).timestamp())
+                    invite_link = await bot.create_chat_invite_link(
+                        chat_id=PAID_CHANNEL_ID,
+                        expire_date=expire_ts,
+                        creates_join_request=True,
+                    )
+                else:
+                    invite_link = await bot.create_chat_invite_link(
+                        chat_id=PAID_CHANNEL_ID,
+                        expire_date=int(new_paid_until.timestamp()),
+                        member_limit=1,
+                    )
                 msg = t(
                     user.get("language") or "en",
                     "success_payment",

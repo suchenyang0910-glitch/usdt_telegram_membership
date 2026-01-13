@@ -107,27 +107,27 @@ TEXTS: Dict[str, Dict[str, str]] = {
     "pricing_block": {
         "zh": (
             "📌 会员价格 & 时长\n"
-            "⚡️ 月费会员：9.99 USDT（30天）\n"
-            "⚡️ 季度会员：19.99 USDT（90天）\n"
-            "⚡️ 年费会员：79.99 USDT（365天）"
+            "⚡️ 月费会员：1.99 USDT（30天）\n"
+            "⚡️ 季度会员：3.99 USDT（90天）\n"
+            "⚡️ 年费会员：15.99 USDT（365天）"
         ),
         "en": (
             "Membership prices & duration\n"
-            "Monthly: 9.99 USDT (30 days)\n"
-            "Quarter: 19.99 USDT (90 days)\n"
-            "Yearly: 79.99 USDT (365 days)"
+            "Monthly: 1.99 USDT (30 days)\n"
+            "Quarter: 3.99 USDT (90 days)\n"
+            "Yearly: 15.99 USDT (365 days)"
         ),
         "km": (
             "តម្លៃ និងរយៈពេលសមាជិកភាព\n"
-            "Monthly: 9.99 USDT (30 days)\n"
-            "Quarter: 19.99 USDT (90 days)\n"
-            "Yearly: 79.99 USDT (365 days)"
+            "Monthly: 1.99 USDT (30 days)\n"
+            "Quarter: 3.99 USDT (90 days)\n"
+            "Yearly: 15.99 USDT (365 days)"
         ),
         "vi": (
             "Giá & thời hạn gói thành viên\n"
-            "Tháng: 9.99 USDT (30 ngày)\n"
-            "Quý: 19.99 USDT (90 ngày)\n"
-            "Năm: 79.99 USDT (365 ngày)"
+            "Tháng: 1.99 USDT (30 ngày)\n"
+            "Quý: 3.99 USDT (90 ngày)\n"
+            "Năm: 15.99 USDT (365 ngày)"
         ),
     },
     "contact_hint": {
