@@ -3,6 +3,7 @@ import subprocess
 import time
 import urllib.parse
 import urllib.request
+import json
 
 
 def _env(name: str, default: str = "") -> str:
@@ -50,6 +51,43 @@ def _tg_send(text: str):
         return
 
 
+def _state_path() -> str:
+    return _env("WATCHDOG_STATE_FILE", "/tmp/pvbot_watchdog_state.json")
+
+
+def _load_state() -> dict:
+    p = _state_path()
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception:
+        return {}
+
+
+def _save_state(state: dict):
+    p = _state_path()
+    try:
+        os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False)
+    except Exception:
+        return
+
+
+def _maybe_notify_ok():
+    if _env("WATCHDOG_NOTIFY_OK", "0") != "1":
+        return
+    every_min = _env_int("WATCHDOG_NOTIFY_OK_EVERY_MIN", 360)
+    now = int(time.time())
+    st = _load_state()
+    last = int(st.get("last_ok_ts") or 0)
+    if last and now - last < every_min * 60:
+        return
+    _tg_send("[watchdog] all services running")
+    st["last_ok_ts"] = now
+    _save_state(st)
+
+
 def _run(cmd: list[str], cwd: str | None = None) -> tuple[int, str]:
     res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
     out = (res.stdout or "") + (("\n" + res.stderr) if res.stderr else "")
@@ -81,6 +119,7 @@ def _systemd_check_and_fix(units: list[str]):
 def _docker_check_and_fix(compose_dir: str, services: list[str]):
     print(f"[watchdog] mode=docker compose_dir={compose_dir} services={services}")
     base = ["docker", "compose"]
+    all_ok = True
     for svc in services:
         if not svc:
             continue
@@ -89,6 +128,7 @@ def _docker_check_and_fix(compose_dir: str, services: list[str]):
         if running:
             print(f"[watchdog] {svc} running")
             continue
+        all_ok = False
         print(f"[watchdog] {svc} not running -> up -d --force-recreate")
         _tg_send(f"[watchdog] docker service {svc} not running, restarting...")
         rc2, out2 = _run(base + ["up", "-d", "--force-recreate", svc], cwd=compose_dir)
@@ -101,6 +141,10 @@ def _docker_check_and_fix(compose_dir: str, services: list[str]):
         else:
             print(f"[watchdog] {svc} restart FAILED: {out2[:200]}")
             _tg_send(f"[watchdog] docker service {svc} restart FAILED\n{out2[:800]}")
+            all_ok = False
+
+    if all_ok:
+        _maybe_notify_ok()
 
 
 def _auto_mode() -> str:
