@@ -1,0 +1,12 @@
+[Unit]
+Description=PV Bot Watchdog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/pvbot/usdt_telegram_membership
+EnvironmentFile=/opt/pvbot/usdt_telegram_membership/.env
+ExecStart=/usr/bin/python3 /opt/pvbot/usdt_telegram_membership/deploy/watchdog.py
+User=root
+

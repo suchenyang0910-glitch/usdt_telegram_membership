@@ -1,0 +1,11 @@
+[Unit]
+Description=PV Bot Watchdog Timer
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+Unit=pvbot-watchdog.service
+
+[Install]
+WantedBy=timers.target
+

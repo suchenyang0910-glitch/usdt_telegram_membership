@@ -3,11 +3,20 @@ import os
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+from telethon.tl.types import Channel, Chat, User
 
 
 def _env_int(name: str, default: int = 0) -> int:
     v = os.getenv(name, "").strip()
     return int(v) if v else default
+
+
+def _bot_api_chat_id(entity) -> int | None:
+    if isinstance(entity, Channel):
+        return -1000000000000 - int(entity.id)
+    if isinstance(entity, Chat):
+        return -int(entity.id)
+    return None
 
 
 async def main():
@@ -26,13 +35,17 @@ async def main():
         if query:
             ent = await client.get_entity(query)
             name = getattr(ent, "title", None) or getattr(ent, "username", None) or ""
-            print(f"id={ent.id}  type={ent.__class__.__name__}  name={name}")
+            bot_id = _bot_api_chat_id(ent)
+            extra = f"  bot_api_id={bot_id}" if bot_id is not None else ""
+            print(f"id={ent.id}  type={ent.__class__.__name__}  name={name}{extra}")
             return
 
         async for d in client.iter_dialogs():
             ent = d.entity
             name = getattr(ent, "title", None) or getattr(ent, "username", None) or ""
-            print(f"id={ent.id}  type={ent.__class__.__name__}  name={name}")
+            bot_id = _bot_api_chat_id(ent)
+            extra = f"  bot_api_id={bot_id}" if bot_id is not None else ""
+            print(f"id={ent.id}  type={ent.__class__.__name__}  name={name}{extra}")
 
 
 if __name__ == "__main__":
