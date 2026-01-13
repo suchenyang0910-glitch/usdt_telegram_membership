@@ -92,11 +92,23 @@ def _docker_check_and_fix(compose_dir: str, services: list[str]):
             _tg_send(f"[watchdog] docker service {svc} restart FAILED\n{out2[:800]}")
 
 
+def _auto_mode() -> str:
+    explicit = _env("WATCHDOG_MODE", "").lower()
+    if explicit:
+        return explicit
+
+    compose_dir = _env("WATCHDOG_DOCKER_COMPOSE_DIR", "/opt/pvbot/usdt_telegram_membership/deploy")
+    for fname in ("docker-compose.yml", "compose.yml"):
+        if os.path.exists(os.path.join(compose_dir, fname)):
+            return "docker"
+    return "systemd"
+
+
 def main():
     if _env("WATCHDOG_ENABLE", "1") != "1":
         return
 
-    mode = _env("WATCHDOG_MODE", "systemd").lower()
+    mode = _auto_mode()
     if mode == "docker":
         compose_dir = _env("WATCHDOG_DOCKER_COMPOSE_DIR", "/opt/pvbot/usdt_telegram_membership/deploy")
         services = [x.strip() for x in _env("WATCHDOG_DOCKER_SERVICES", "app,mysql,userbot").split(",") if x.strip()]
