@@ -25,6 +25,7 @@ from config import (
     USERBOT_SESSION_NAME,
     USERBOT_STRING_SESSION,
 )
+from core.models import claim_clip_dispatch, mark_clip_dispatch_sent, unclaim_clip_dispatch
 
 
 def _targets() -> list[int]:
@@ -211,9 +212,16 @@ async def _process_video_message(client: TelegramClient, msg, caption_src: str):
     sent = 0
     for ch in targets:
         try:
+            if not claim_clip_dispatch(PAID_CHANNEL_ID, int(msg.id), int(ch), "userbot"):
+                continue
             await client.send_file(ch, dst, caption=caption, supports_streaming=True)
+            mark_clip_dispatch_sent(PAID_CHANNEL_ID, int(msg.id), int(ch))
             sent += 1
         except Exception as e:
+            try:
+                unclaim_clip_dispatch(PAID_CHANNEL_ID, int(msg.id), int(ch))
+            except Exception:
+                pass
             await _notify(
                 client,
                 f"<b>发送失败</b>\nmsg_id=<code>{msg.id}</code>\ntarget=<code>{ch}</code>\nerr=<code>{type(e).__name__}</code>: {e}",

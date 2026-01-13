@@ -28,6 +28,7 @@ from config import (
 )
 from bot.captions import compose_free_caption
 from core.models import create_video_post
+from core.models import claim_clip_dispatch, mark_clip_dispatch_sent, unclaim_clip_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -179,14 +180,26 @@ async def upload_receive_media(update: Update, context: ContextTypes.DEFAULT_TYP
         last_err = None
         for i in range(SEND_RETRY):
             try:
+                if not claim_clip_dispatch(PAID_CHANNEL_ID, int(paid_sent.message_id), int(ch), "upload"):
+                    sent = None
+                    break
                 with open(dst, "rb") as f:
                     sent = await context.bot.send_video(chat_id=ch, video=f, caption=caption_text)
                 break
             except Exception as e:
+                try:
+                    unclaim_clip_dispatch(PAID_CHANNEL_ID, int(paid_sent.message_id), int(ch))
+                except Exception:
+                    pass
                 last_err = e
                 continue
         if ch == HIGHLIGHT_CHANNEL_ID:
             highlight_msg = sent
+        if sent is not None:
+            try:
+                mark_clip_dispatch_sent(PAID_CHANNEL_ID, int(paid_sent.message_id), int(ch))
+            except Exception:
+                pass
         if sent is None and last_err is not None and ch == HIGHLIGHT_CHANNEL_ID:
             await msg.reply_text(f"引流频道发布失败：{last_err}")
 

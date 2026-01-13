@@ -120,6 +120,23 @@ def init_tables():
         """
     )
 
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS clip_dispatch (
+            id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+            source_chat_id  BIGINT NOT NULL,
+            source_msg_id   BIGINT NOT NULL,
+            target_chat_id  BIGINT NOT NULL,
+            origin          VARCHAR(32) NOT NULL,
+            status          VARCHAR(16) NOT NULL,
+            created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uniq_clip_dispatch (source_chat_id, source_msg_id, target_chat_id),
+            INDEX idx_clip_dispatch_status_time (status, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+    )
+
     conn.commit()
 
     _ensure_columns(
@@ -664,6 +681,48 @@ def create_video_post(channel_id: int, message_id: int, file_id: str, caption: s
         VALUES (%s, %s, %s, %s)
         """,
         (channel_id, message_id, file_id, caption or ""),
+    )
+    conn.commit()
+    cur.close(); conn.close()
+
+
+def claim_clip_dispatch(source_chat_id: int, source_msg_id: int, target_chat_id: int, origin: str) -> bool:
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT IGNORE INTO clip_dispatch (source_chat_id, source_msg_id, target_chat_id, origin, status)
+        VALUES (%s, %s, %s, %s, 'sending')
+        """,
+        (int(source_chat_id), int(source_msg_id), int(target_chat_id), (origin or "")[:32]),
+    )
+    ok = int(cur.rowcount or 0) == 1
+    conn.commit()
+    cur.close(); conn.close()
+    return ok
+
+
+def mark_clip_dispatch_sent(source_chat_id: int, source_msg_id: int, target_chat_id: int):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE clip_dispatch
+        SET status='sent'
+        WHERE source_chat_id=%s AND source_msg_id=%s AND target_chat_id=%s
+        """,
+        (int(source_chat_id), int(source_msg_id), int(target_chat_id)),
+    )
+    conn.commit()
+    cur.close(); conn.close()
+
+
+def unclaim_clip_dispatch(source_chat_id: int, source_msg_id: int, target_chat_id: int):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        """
+        DELETE FROM clip_dispatch
+        WHERE source_chat_id=%s AND source_msg_id=%s AND target_chat_id=%s
+        """,
+        (int(source_chat_id), int(source_msg_id), int(target_chat_id)),
     )
     conn.commit()
     cur.close(); conn.close()

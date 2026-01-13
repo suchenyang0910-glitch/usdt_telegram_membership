@@ -21,6 +21,7 @@ from config import (
 )
 from bot.captions import compose_free_caption
 from bot.admin_report import send_admin_text
+from core.models import claim_clip_dispatch, mark_clip_dispatch_sent, unclaim_clip_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -172,11 +173,18 @@ async def private_channel_video_handler(update: Update, context: ContextTypes.DE
     for ch in targets:
         for i in range(SEND_RETRY):
             try:
+                if not claim_clip_dispatch(PAID_CHANNEL_ID, int(message.message_id), int(ch), "bot"):
+                    break
                 with open(dst, "rb") as f:
                     await context.bot.send_video(chat_id=ch, video=f, caption=caption)
                 logger.info("[clipper] 已将剪辑发送到频道 %s (尝试第 %s 次)", ch, i + 1)
+                mark_clip_dispatch_sent(PAID_CHANNEL_ID, int(message.message_id), int(ch))
                 break
             except Exception as e:
+                try:
+                    unclaim_clip_dispatch(PAID_CHANNEL_ID, int(message.message_id), int(ch))
+                except Exception:
+                    pass
                 logger.error(
                     "[clipper] 发送剪辑到 %s 失败（第 %s 次）: %s",
                     ch,
