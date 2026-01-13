@@ -24,6 +24,14 @@ def compose_free_caption(original_caption: str, max_len: int = 1024) -> str:
     if keep <= 0:
         return base[:max_len]
     if len(orig) > keep:
-        orig = orig[:keep].rstrip()
+        ell = "…"
+        head = int(keep * 0.7)
+        tail = keep - head - len(ell)
+        if tail <= 0:
+            orig = orig[:keep].rstrip()
+        else:
+            left = orig[:head].rstrip()
+            right = orig[-tail:].lstrip()
+            orig = (left + ell + right).strip()
     return (orig + sep + base)[:max_len]
 

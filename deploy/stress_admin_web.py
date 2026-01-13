@@ -7,7 +7,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
 
 def _auth_header(user: str, password: str) -> str:
@@ -55,7 +55,12 @@ def main():
     ap.add_argument("--q", default="", help="optional username query")
     args = ap.parse_args()
 
-    base = args.base.rstrip("/")
+    base = (args.base or "").strip()
+    if base.startswith("`") and base.endswith("`") and len(base) >= 2:
+        base = base[1:-1].strip()
+    base = base.rstrip("/")
+    if not (base.startswith("http://") or base.startswith("https://")):
+        raise SystemExit(f"bad --base: {base!r} (expect http://host:port)")
     headers = {"Authorization": _auth_header(args.user, args.password)}
     mix = [x.strip() for x in (args.mix or "").split(",") if x.strip()]
     if not mix:
@@ -100,15 +105,12 @@ def main():
             inflight.add(ex.submit(worker_once))
 
         while inflight:
-            done = []
-            for f in as_completed(inflight, timeout=1):
-                done.append(f)
-                break
+            done, _pending = wait(inflight, timeout=1, return_when=FIRST_COMPLETED)
             if not done:
                 if time.time() >= end_at:
                     break
                 continue
-            for f in done:
+            for f in list(done):
                 inflight.remove(f)
                 try:
                     dt, code, size, err = f.result()
@@ -123,6 +125,12 @@ def main():
 
                 if time.time() < end_at:
                     inflight.add(ex.submit(worker_once))
+
+        for f in list(inflight):
+            try:
+                f.cancel()
+            except Exception:
+                pass
 
     ok = sum(v for k, v in codes.items() if 200 <= k < 300)
     fail = total - ok
