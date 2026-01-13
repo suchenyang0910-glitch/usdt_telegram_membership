@@ -12,3 +12,18 @@ def highlight_caption() -> str:
         "⚡️ 年费会员：79.99 USDT（365天）\n"
     )
 
+
+def compose_free_caption(original_caption: str, max_len: int = 1024) -> str:
+    base = highlight_caption()
+    orig = (original_caption or "").strip()
+    if not orig:
+        return base[:max_len]
+
+    sep = "\n\n"
+    keep = max_len - len(base) - len(sep)
+    if keep <= 0:
+        return base[:max_len]
+    if len(orig) > keep:
+        orig = orig[:keep].rstrip()
+    return (orig + sep + base)[:max_len]
+

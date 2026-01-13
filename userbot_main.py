@@ -9,7 +9,7 @@ from datetime import datetime
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
-from bot.captions import highlight_caption
+from bot.captions import compose_free_caption
 from config import (
     ADMIN_REPORT_CHAT_ID,
     ADMIN_USER_IDS,
@@ -209,7 +209,7 @@ async def main():
                     pass
                 return
 
-            caption = highlight_caption()
+            caption = compose_free_caption((msg.message or ""))
             targets = _clip_targets()
             sent = 0
             for ch in targets:

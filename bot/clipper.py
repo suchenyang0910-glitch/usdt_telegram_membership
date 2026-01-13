@@ -19,7 +19,7 @@ from config import (
     HIGHLIGHT_CHANNEL_ID,
     MAX_TG_DOWNLOAD_MB,
 )
-from bot.captions import highlight_caption
+from bot.captions import compose_free_caption
 from bot.admin_report import send_admin_text
 
 logger = logging.getLogger(__name__)
@@ -162,7 +162,7 @@ async def private_channel_video_handler(update: Update, context: ContextTypes.DE
             pass
         return
 
-    caption = highlight_caption()
+    caption = compose_free_caption(message.caption or "")
 
     targets = []
     for ch in ([HIGHLIGHT_CHANNEL_ID] + list(FREE_CHANNEL_IDS)):

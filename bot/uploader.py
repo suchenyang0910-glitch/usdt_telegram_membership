@@ -26,7 +26,7 @@ from config import (
     SEND_RETRY,
     MAX_TG_DOWNLOAD_MB,
 )
-from bot.captions import highlight_caption
+from bot.captions import compose_free_caption
 from core.models import create_video_post
 
 logger = logging.getLogger(__name__)
@@ -167,7 +167,7 @@ async def upload_receive_media(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
         return ConversationHandler.END
 
-    caption_text = highlight_caption()
+    caption_text = compose_free_caption(caption or "")
     highlight_msg = None
     targets = []
     for ch in ([HIGHLIGHT_CHANNEL_ID] + list(FREE_CHANNEL_IDS)):
