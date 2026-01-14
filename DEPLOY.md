@@ -33,11 +33,11 @@ docker compose --profile admin up -d --build
 ## 方式 B：systemd（Linux）
 
 1）服务器安装依赖：Python、ffmpeg、MySQL 客户端库（如需）  
-2）代码放到：`/opt/pvbot`  
+2）代码放到：`/opt/pvbot/usdt_telegram_membership`  
 3）创建虚拟环境并安装依赖（核心链路）
 
 ```bash
-cd /opt/pvbot
+cd /opt/pvbot/usdt_telegram_membership
 python -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
@@ -49,33 +49,33 @@ pip install -r requirements.txt
 pip install -r requirements-media.txt
 ```
 
-4）放置 `.env` 到 `/opt/pvbot/.env`  
+4）放置 `.env` 到 `/opt/pvbot/usdt_telegram_membership/.env`  
 5）安装 systemd 服务
 
 ```bash
-sudo cp /opt/pvbot/deploy/pvbot.service /etc/systemd/system/pvbot.service
+sudo cp /opt/pvbot/usdt_telegram_membership/deploy/pvbot.service /etc/systemd/system/pvbot.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now pvbot
 sudo systemctl status pvbot
 ```
 
 日志文件：
-- `/opt/pvbot/logs/runtime.log`
-- `/opt/pvbot/logs/bot.log`
+- `/opt/pvbot/usdt_telegram_membership/logs/runtime.log`
+- `/opt/pvbot/usdt_telegram_membership/logs/bot.log`
 
 ### 管理后台（可选）
 
 安装服务：
 
 ```bash
-sudo cp /opt/pvbot/deploy/pvadmin.service /etc/systemd/system/pvadmin.service
+sudo cp /opt/pvbot/usdt_telegram_membership/deploy/pvadmin.service /etc/systemd/system/pvadmin.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now pvadmin
 sudo systemctl status pvadmin
 ```
 
 注意：
-- 需要在 `/opt/pvbot/.env` 里设置 `ADMIN_WEB_USER/ADMIN_WEB_PASS`
+- 需要在 `/opt/pvbot/usdt_telegram_membership/.env` 里设置 `ADMIN_WEB_USER/ADMIN_WEB_PASS`
 - 如需只允许本机访问，将 `ADMIN_WEB_HOST` 设为 `127.0.0.1`
 
 ### watchdog（可选，推荐开启无人值守）
@@ -85,18 +85,18 @@ watchdog 会周期性检查服务是否“在跑”，并可选按心跳文件�
 安装并启动 timer：
 
 ```bash
-sudo cp /opt/pvbot/deploy/pvbot-watchdog.service /etc/systemd/system/pvbot-watchdog.service
-sudo cp /opt/pvbot/deploy/pvbot-watchdog.timer /etc/systemd/system/pvbot-watchdog.timer
+sudo cp /opt/pvbot/usdt_telegram_membership/deploy/pvbot-watchdog.service /etc/systemd/system/pvbot-watchdog.service
+sudo cp /opt/pvbot/usdt_telegram_membership/deploy/pvbot-watchdog.timer /etc/systemd/system/pvbot-watchdog.timer
 sudo systemctl daemon-reload
 sudo systemctl enable --now pvbot-watchdog.timer
 sudo systemctl status pvbot-watchdog.timer
 ```
 
-建议在 `/opt/pvbot/.env` 增加（按实际服务名调整）：
+建议在 `/opt/pvbot/usdt_telegram_membership/.env` 增加（按实际服务名调整）：
 - `WATCHDOG_ENABLE=1`
 - `WATCHDOG_MODE=systemd`
 - `WATCHDOG_SYSTEMD_UNITS=pvbot.service,pvadmin.service`
-- `WATCHDOG_PROJECT_DIR=/opt/pvbot`
+- `WATCHDOG_PROJECT_DIR=/opt/pvbot/usdt_telegram_membership`
 - `WATCHDOG_HEARTBEAT_MAP=pvbot.service:tmp/heartbeat_app.json`
 - `WATCHDOG_HEARTBEAT_MAX_AGE_SEC=300`
 

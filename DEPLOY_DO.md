@@ -32,8 +32,8 @@ docker compose version
 ## 3）准备项目目录并拉取代码
 
 ```bash
-mkdir -p /opt/pvbot
-cd /opt/pvbot
+mkdir -p /opt/pvbot/usdt_telegram_membership
+cd /opt/pvbot/usdt_telegram_membership
 git clone https://github.com/<你的账号>/<你的仓库>.git .
 ```
 
@@ -59,7 +59,7 @@ cp .env.example .env
 ## 5）启动（第一次）
 
 ```bash
-cd /opt/pvbot/deploy
+cd /opt/pvbot/usdt_telegram_membership/deploy
 docker compose up -d --build
 docker compose logs -f app
 ```
@@ -67,7 +67,7 @@ docker compose logs -f app
 ## 6）健康检查与常用命令
 
 ```bash
-cd /opt/pvbot/deploy
+cd /opt/pvbot/usdt_telegram_membership/deploy
 docker compose ps
 docker compose logs -f app
 docker compose restart app
@@ -108,7 +108,7 @@ git config --global core.sshCommand "ssh -i /opt/pvbot/.ssh/deploy_key -o Identi
 - `DO_HOST`：服务器 IP
 - `DO_USER`：服务器用户名（如 root 或 ubuntu）
 - `DO_SSH_KEY`：你本地用于登录服务器的私钥内容（不是 deploy_key）
-- `APP_DIR`：`/opt/pvbot`
+- `APP_DIR`：`/opt/pvbot/usdt_telegram_membership`
 - 可选：`DO_SSH_PORT`：默认 22
 
 ### 7.3 push 后自动部署

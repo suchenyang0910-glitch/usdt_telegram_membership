@@ -5,14 +5,14 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/pvbot
-EnvironmentFile=/opt/pvbot/.env
+WorkingDirectory=/opt/pvbot/usdt_telegram_membership
+EnvironmentFile=/opt/pvbot/usdt_telegram_membership/.env
 Environment=ADMIN_WEB_ENABLE=1
-ExecStart=/opt/pvbot/.venv/bin/python /opt/pvbot/admin_web.py
+ExecStart=/opt/pvbot/usdt_telegram_membership/.venv/bin/python /opt/pvbot/usdt_telegram_membership/admin_web.py
 Restart=always
 RestartSec=3
-StandardOutput=append:/opt/pvbot/logs/runtime.log
-StandardError=append:/opt/pvbot/logs/runtime.log
+StandardOutput=append:/opt/pvbot/usdt_telegram_membership/logs/runtime.log
+StandardError=append:/opt/pvbot/usdt_telegram_membership/logs/runtime.log
 
 [Install]
 WantedBy=multi-user.target

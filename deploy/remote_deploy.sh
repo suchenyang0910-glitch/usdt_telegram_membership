@@ -1,6 +1,6 @@
 set -e
 
-APP_DIR="${APP_DIR:-/opt/pvbot}"
+APP_DIR="${APP_DIR:-/opt/pvbot/usdt_telegram_membership}"
 BRANCH="${BRANCH:-main}"
 
 cd "$APP_DIR"

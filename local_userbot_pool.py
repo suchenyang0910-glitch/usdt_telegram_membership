@@ -63,6 +63,9 @@ class Settings:
     restart_backoff_max_sec: int
     max_clients: int
     download_timeout_sec: int
+    download_stall_timeout_sec: int
+    min_download_kbps: int
+    max_download_timeout_sec: int
     fetch_limit: int
     validate_media: bool
     transcode_h264: bool
@@ -84,9 +87,11 @@ def _load_sessions() -> list[str]:
             os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
             raise SystemExit(f"sessions file not found: {p}\nPlease create it and add one StringSession per line.")
         out: list[str] = []
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, "r", encoding="utf-8-sig") as f:
             for line in f:
-                s = line.strip()
+                s = (line or "").strip().lstrip("\ufeff")
+                if s.startswith("#"):
+                    continue
                 if s:
                     out.append(s)
         return out
@@ -127,6 +132,9 @@ def load_settings() -> Settings:
     restart_backoff_max_sec = _env_int("LOCAL_USERBOT_RESTART_BACKOFF_MAX_SEC", 300)
     max_clients = _env_int("LOCAL_USERBOT_MAX_CLIENTS", 5)
     download_timeout_sec = _env_int("LOCAL_USERBOT_DOWNLOAD_TIMEOUT_SEC", 900)
+    download_stall_timeout_sec = _env_int("LOCAL_USERBOT_DOWNLOAD_STALL_TIMEOUT_SEC", 180)
+    min_download_kbps = _env_int("LOCAL_USERBOT_MIN_DOWNLOAD_KBPS", 128)
+    max_download_timeout_sec = _env_int("LOCAL_USERBOT_MAX_DOWNLOAD_TIMEOUT_SEC", 7200)
     fetch_limit = _env_int("LOCAL_USERBOT_FETCH_LIMIT", 50)
     validate_media = os.getenv("LOCAL_USERBOT_VALIDATE_MEDIA", "1").strip() == "1"
     transcode_h264 = os.getenv("LOCAL_USERBOT_TRANSCODE_H264", "0").strip() == "1"
@@ -166,6 +174,9 @@ def load_settings() -> Settings:
         restart_backoff_max_sec=max(restart_backoff_min_sec, restart_backoff_max_sec),
         max_clients=max(1, max_clients),
         download_timeout_sec=max(60, download_timeout_sec),
+        download_stall_timeout_sec=max(30, download_stall_timeout_sec),
+        min_download_kbps=max(16, min_download_kbps),
+        max_download_timeout_sec=max(download_timeout_sec, max_download_timeout_sec),
         fetch_limit=max(10, min(500, fetch_limit)),
         validate_media=validate_media,
         transcode_h264=transcode_h264,
@@ -176,6 +187,58 @@ def load_settings() -> Settings:
 
 def _ensure_dir(p: str):
     os.makedirs(p, exist_ok=True)
+
+
+def _calc_overall_timeout_sec(total_bytes: int, base_timeout_sec: int, min_kbps: int, max_timeout_sec: int) -> int:
+    base = max(60, int(base_timeout_sec or 0))
+    cap = max(base, int(max_timeout_sec or base))
+    kbps = max(16, int(min_kbps or 0))
+    if not total_bytes or total_bytes <= 0:
+        return base
+    est = int((float(total_bytes) / float(kbps * 1024)) * 2.0 + 60.0)
+    return min(cap, max(base, est))
+
+
+async def _download_media_with_timeouts(
+    client: TelegramClient,
+    msg,
+    folder: str,
+    base_timeout_sec: int,
+    stall_timeout_sec: int,
+    min_kbps: int,
+    max_timeout_sec: int,
+):
+    total = int(getattr(getattr(msg, "file", None), "size", None) or 0)
+    overall = _calc_overall_timeout_sec(total, base_timeout_sec, min_kbps, max_timeout_sec)
+    stall = max(30, int(stall_timeout_sec or 0))
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    last_progress = started
+    last_bytes = 0
+
+    def _progress(cur: int, tot: int):
+        nonlocal last_progress, last_bytes
+        cur_i = int(cur or 0)
+        if cur_i != last_bytes:
+            last_bytes = cur_i
+            last_progress = loop.time()
+
+    task = asyncio.create_task(client.download_media(msg, file=folder, progress_callback=_progress))
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=5)
+            if task in done:
+                return await task
+            now = loop.time()
+            if now - started > float(overall):
+                task.cancel()
+                raise asyncio.TimeoutError("download overall timeout")
+            if now - last_progress > float(stall):
+                task.cancel()
+                raise asyncio.TimeoutError("download stalled")
+    finally:
+        if not task.done():
+            task.cancel()
 
 
 def setup_local_logging(root: str):
@@ -277,14 +340,22 @@ async def _download_one(
         pass
 
     try:
-        await asyncio.wait_for(client.download_media(msg, file=folder), timeout=float(timeout_sec))
+        await _download_media_with_timeouts(
+            client,
+            msg,
+            folder=folder,
+            base_timeout_sec=int(timeout_sec),
+            stall_timeout_sec=_env_int("LOCAL_USERBOT_DOWNLOAD_STALL_TIMEOUT_SEC", 180),
+            min_kbps=_env_int("LOCAL_USERBOT_MIN_DOWNLOAD_KBPS", 128),
+            max_timeout_sec=_env_int("LOCAL_USERBOT_MAX_DOWNLOAD_TIMEOUT_SEC", 7200),
+        )
         return True, folder
-    except asyncio.TimeoutError:
+    except asyncio.TimeoutError as e:
         try:
             shutil.rmtree(folder, ignore_errors=True)
         except Exception:
             pass
-        return False, "download timeout"
+        return False, (str(e) or "download timeout")
     except asyncio.CancelledError:
         raise
     except Exception as e:
@@ -491,9 +562,19 @@ async def _download_many(
                 is_photo = mime.startswith("image/")
 
             downloaded_path = None
+            timed_out = False
             for attempt in range(2):
                 try:
-                    downloaded_path = await asyncio.wait_for(client.download_media(m, file=folder), timeout=float(timeout_sec))
+                    await _download_media_with_timeouts(
+                        client,
+                        m,
+                        folder=folder,
+                        base_timeout_sec=int(timeout_sec),
+                        stall_timeout_sec=_env_int("LOCAL_USERBOT_DOWNLOAD_STALL_TIMEOUT_SEC", 180),
+                        min_kbps=_env_int("LOCAL_USERBOT_MIN_DOWNLOAD_KBPS", 128),
+                        max_timeout_sec=_env_int("LOCAL_USERBOT_MAX_DOWNLOAD_TIMEOUT_SEC", 7200),
+                    )
+                    downloaded_path = _pick_downloaded_media_path(folder)
                     break
                 except FileReferenceExpiredError:
                     try:
@@ -503,7 +584,14 @@ async def _download_many(
                     except Exception:
                         pass
                     continue
+                except asyncio.TimeoutError as e:
+                    failed_ids.append(mid)
+                    fail_reason = str(e) or "download timeout"
+                    timed_out = True
+                    break
 
+            if timed_out:
+                continue
             if not downloaded_path:
                 skipped_ids.append(mid)
                 continue
@@ -536,12 +624,12 @@ async def _download_many(
 
         return True, folder, images, videos, succeeded_ids, skipped_ids, failed_ids, ""
 
-    except asyncio.TimeoutError:
+    except asyncio.TimeoutError as e:
         try:
             shutil.rmtree(folder, ignore_errors=True)
         except Exception:
             pass
-        return False, "download timeout", images, videos, succeeded_ids, skipped_ids, failed_ids, "download timeout"
+        return False, "download timeout", images, videos, succeeded_ids, skipped_ids, failed_ids, (str(e) or "download timeout")
     except asyncio.CancelledError:
         raise
     except Exception as e:
