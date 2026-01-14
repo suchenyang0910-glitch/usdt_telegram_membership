@@ -21,10 +21,18 @@
 
 `.env.secrets`：
 - 从 [\.env.secrets.example](file:///d:/VScode/usdt_telegram_membership/.env.secrets.example) 复制为 `.env.secrets` 后填写
+3）启动
 
 ```bash
 cd deploy
 docker compose up -d --build
+```
+
+也可以用一键脚本（自动进入 deploy 目录并调用 docker compose）：
+
+```bash
+bash /opt/pvbot/usdt_telegram_membership/deploy/ctl.sh up
+bash /opt/pvbot/usdt_telegram_membership/deploy/ctl.sh logs app
 ```
 
 日志：

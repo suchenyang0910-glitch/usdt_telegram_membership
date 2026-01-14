@@ -4,12 +4,14 @@ import time
 from logging.handlers import RotatingFileHandler
 
 from config import (
+    BOT_TOKEN,
     LOG_BACKUP_COUNT,
     LOG_FILE,
     LOG_LEVEL,
     LOG_MAX_BYTES,
     LOG_RETENTION_DAYS,
     RUNTIME_LOG_FILE,
+    TRONGRID_API_KEY,
 )
 
 
@@ -87,6 +89,32 @@ def setup_logging():
     root.addHandler(bot_fh)
     root.addHandler(rt_fh)
     root.addHandler(sh)
+
+    class _SecretFilter(logging.Filter):
+        def __init__(self, secrets: list[str]):
+            super().__init__()
+            self._secrets = [s for s in secrets if s]
+
+        def filter(self, record: logging.LogRecord) -> bool:
+            try:
+                msg = record.getMessage()
+            except Exception:
+                return True
+            for s in self._secrets:
+                if s and s in msg:
+                    msg = msg.replace(s, "***")
+            record.msg = msg
+            record.args = ()
+            return True
+
+    secret_filter = _SecretFilter([str(BOT_TOKEN or "").strip(), str(TRONGRID_API_KEY or "").strip()])
+    bot_fh.addFilter(secret_filter)
+    rt_fh.addFilter(secret_filter)
+    sh.addFilter(secret_filter)
+
+    for name in ("httpx", "httpcore", "telegram", "apscheduler"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
     root._pv_logging_configured = True
     try:
         cleanup_old_logs()

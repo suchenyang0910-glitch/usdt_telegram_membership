@@ -25,9 +25,20 @@ def _load_json_file(path: str) -> dict:
     except Exception:
         return {}
 
+def _resolve_cfg_path(p: str, default_filename: str) -> str:
+    p = _abs(p)
+    if not p:
+        return p
+    try:
+        if os.path.isdir(p):
+            return os.path.join(p, default_filename)
+    except Exception:
+        pass
+    return p
 
-_cfg_default_path = _abs(os.getenv("APP_CONFIG_DEFAULT_FILE", "config/app_config.defaults.json"))
-_cfg_path = _abs(os.getenv("APP_CONFIG_FILE", "config/app_config.json"))
+
+_cfg_default_path = _resolve_cfg_path(os.getenv("APP_CONFIG_DEFAULT_FILE", "config/app_config.defaults.json"), "app_config.defaults.json")
+_cfg_path = _resolve_cfg_path(os.getenv("APP_CONFIG_FILE", "config/app_config.json"), "app_config.json")
 _CFG = {**_load_json_file(_cfg_default_path), **_load_json_file(_cfg_path)}
 
 _ENV_ONLY_KEYS = {
@@ -309,6 +320,18 @@ def _docker_tail(compose_dir: str, svc: str) -> str:
     return _tail_lines(out, _env_int("WATCHDOG_LOG_TAIL_MAX_CHARS", 6000))
 
 
+def _docker_health_ok(compose_dir: str, svc: str) -> bool | None:
+    rc, cid = _run(["docker", "compose", "ps", "-q", svc], cwd=compose_dir)
+    cid = (cid or "").strip()
+    if rc != 0 or not cid:
+        return None
+    rc2, status = _run(["docker", "inspect", "-f", "{{.State.Health.Status}}", cid])
+    status = (status or "").strip().lower()
+    if rc2 != 0 or not status or status in ("<no value>", "null"):
+        return None
+    return status == "healthy"
+
+
 def _parse_checks(raw: str) -> list[str]:
     return [x.strip() for x in (raw or "").split(",") if x.strip()]
 
@@ -477,6 +500,12 @@ def _docker_check_and_fix(compose_dir: str, services: list[str], heartbeat_map: 
                     print(f"[watchdog] {svc} running")
                     _record_success(st, key)
                     continue
+                if _env("WATCHDOG_DOCKER_TRUST_HEALTHCHECK", "1") == "1":
+                    ok_health = _docker_health_ok(compose_dir, svc)
+                    if ok_health is True:
+                        print(f"[watchdog] {svc} healthcheck=healthy (ignore heartbeat file)")
+                        _record_success(st, key)
+                        continue
                 all_ok = False
                 print(f"[watchdog] {svc} unhealthy -> up -d --force-recreate ({reason})")
                 ok_restart, cb_reason = _circuit_allows_restart(st, key)

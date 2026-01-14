@@ -27,9 +27,26 @@ def _load_json_file(path: str) -> dict:
     except Exception:
         return {}
 
+def _resolve_cfg_path(p: str, default_filename: str) -> str:
+    p = _abs_path(p)
+    if not p:
+        return p
+    try:
+        if os.path.isdir(p):
+            return os.path.join(p, default_filename)
+    except Exception:
+        pass
+    return p
 
-_cfg_default_path = _abs_path(os.getenv("APP_CONFIG_DEFAULT_FILE", "config/app_config.defaults.json"))
-_cfg_path = _abs_path(os.getenv("APP_CONFIG_FILE", "config/app_config.json"))
+
+_cfg_default_path = _resolve_cfg_path(
+    os.getenv("APP_CONFIG_DEFAULT_FILE", "config/app_config.defaults.json"),
+    "app_config.defaults.json",
+)
+_cfg_path = _resolve_cfg_path(
+    os.getenv("APP_CONFIG_FILE", "config/app_config.json"),
+    "app_config.json",
+)
 _CFG_DEFAULT = _load_json_file(_cfg_default_path)
 _CFG_LOCAL = _load_json_file(_cfg_path)
 _CFG = {**_CFG_DEFAULT, **_CFG_LOCAL}

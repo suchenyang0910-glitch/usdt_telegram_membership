@@ -73,6 +73,13 @@ docker compose up -d --build
 docker compose logs -f app
 ```
 
+也可以用一键脚本：
+
+```bash
+bash /opt/pvbot/usdt_telegram_membership/deploy/ctl.sh up
+bash /opt/pvbot/usdt_telegram_membership/deploy/ctl.sh logs app
+```
+
 ## 6）健康检查与常用命令
 
 ```bash

@@ -62,6 +62,7 @@ from core.logging_setup import cleanup_old_logs
 from bot.admin_report import notify_recharge_success, send_admin_text
 import logging
 logger = logging.getLogger(__name__)
+_last_heartbeat_err_ts = 0
 
 _last_overnight_report_local_date = None
 _last_health_alert_ts = None
@@ -104,6 +105,11 @@ async def heartbeat_job(context: ContextTypes.DEFAULT_TYPE):
             json.dump(payload, f, ensure_ascii=False)
         os.replace(tmp, p)
     except Exception:
+        global _last_heartbeat_err_ts
+        now = int(time.time())
+        if not _last_heartbeat_err_ts or (now - int(_last_heartbeat_err_ts)) > 300:
+            _last_heartbeat_err_ts = now
+            logger.warning("[heartbeat] write failed path=%s", p)
         return
 
 async def cleanup_logs_job(context: ContextTypes.DEFAULT_TYPE):
