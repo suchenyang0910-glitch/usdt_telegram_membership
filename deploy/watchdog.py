@@ -1,13 +1,70 @@
 import os
 import subprocess
 import time
+import socket
 import urllib.parse
 import urllib.request
 import json
 
 
+def _abs(p: str) -> str:
+    p = (p or "").strip()
+    if not p:
+        return p
+    if os.path.isabs(p):
+        return p
+    base = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    return os.path.join(base, p)
+
+
+def _load_json_file(path: str) -> dict:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+_cfg_default_path = _abs(os.getenv("APP_CONFIG_DEFAULT_FILE", "config/app_config.defaults.json"))
+_cfg_path = _abs(os.getenv("APP_CONFIG_FILE", "config/app_config.json"))
+_CFG = {**_load_json_file(_cfg_default_path), **_load_json_file(_cfg_path)}
+
+_ENV_ONLY_KEYS = {
+    "BOT_TOKEN",
+    "BOT_USERNAME",
+    "PAID_CHANNEL_ID",
+    "HIGHLIGHT_CHANNEL_ID",
+    "FREE_CHANNEL_ID_1",
+    "FREE_CHANNEL_ID_2",
+    "FREE_CHANNEL_IDS",
+    "TRONGRID_API_KEY",
+    "MIN_TX_AGE_SEC",
+    "PAYMENT_MODE",
+    "RECEIVE_ADDRESS",
+    "PAYMENT_SUFFIX_ENABLE",
+    "PAYMENT_SUFFIX_MIN",
+    "PAYMENT_SUFFIX_MAX",
+    "USDT_ADDRESS_POOL",
+    "DB_HOST",
+    "DB_PORT",
+    "DB_USER",
+    "DB_PASS",
+    "DB_NAME",
+    "MYSQL_ROOT_PASSWORD",
+    "MYSQL_DATABASE",
+    "MYSQL_USER",
+    "MYSQL_PASSWORD",
+}
+
+
 def _env(name: str, default: str = "") -> str:
-    return (os.getenv(name, default) or "").strip()
+    if name in os.environ:
+        return (os.getenv(name, default) or "").strip()
+    if name in _ENV_ONLY_KEYS:
+        return (default or "").strip()
+    v = _CFG.get(name, default)
+    return ("" if v is None else str(v)).strip()
 
 
 def _env_int(name: str, default: int) -> int:
@@ -139,12 +196,193 @@ def _run(cmd: list[str], cwd: str | None = None) -> tuple[int, str]:
     return res.returncode, out.strip()
 
 
+def _now_ts() -> int:
+    return int(time.time())
+
+
+def _state_get_target(st: dict, key: str) -> dict:
+    t = (st.get("targets") or {}).get(key)
+    return t if isinstance(t, dict) else {}
+
+
+def _state_set_target(st: dict, key: str, data: dict):
+    targets = st.get("targets")
+    if not isinstance(targets, dict):
+        targets = {}
+        st["targets"] = targets
+    targets[key] = data
+
+
+def _record_success(st: dict, key: str):
+    t = _state_get_target(st, key)
+    t["fail_count"] = 0
+    t["last_ok_ts"] = _now_ts()
+    t["circuit_until_ts"] = 0
+    _state_set_target(st, key, t)
+
+
+def _record_failure(st: dict, key: str, reason: str):
+    t = _state_get_target(st, key)
+    t["fail_count"] = int(t.get("fail_count") or 0) + 1
+    t["last_fail_ts"] = _now_ts()
+    t["last_reason"] = (reason or "")[:800]
+    _state_set_target(st, key, t)
+
+
+def _record_restart(st: dict, key: str):
+    t = _state_get_target(st, key)
+    hist = t.get("restart_ts") or []
+    if not isinstance(hist, list):
+        hist = []
+    now = _now_ts()
+    hist.append(now)
+    window_min = _env_int("WATCHDOG_CIRCUIT_WINDOW_MIN", 60)
+    cutoff = now - int(window_min) * 60
+    hist = [int(x) for x in hist if int(x) >= cutoff][-200:]
+    t["restart_ts"] = hist
+    _state_set_target(st, key, t)
+
+
+def _circuit_allows_restart(st: dict, key: str) -> tuple[bool, str]:
+    t = _state_get_target(st, key)
+    now = _now_ts()
+    until = int(t.get("circuit_until_ts") or 0)
+    if until and now < until:
+        left = until - now
+        return False, f"circuit open ({left}s left)"
+    hist = t.get("restart_ts") or []
+    if not isinstance(hist, list):
+        hist = []
+    max_n = _env_int("WATCHDOG_CIRCUIT_MAX_RESTARTS", 5)
+    window_min = _env_int("WATCHDOG_CIRCUIT_WINDOW_MIN", 60)
+    cutoff = now - int(window_min) * 60
+    recent = [int(x) for x in hist if int(x) >= cutoff]
+    if len(recent) < int(max_n):
+        return True, ""
+    open_min = _env_int("WATCHDOG_CIRCUIT_OPEN_MIN", 15)
+    t["circuit_until_ts"] = now + int(open_min) * 60
+    _state_set_target(st, key, t)
+    return False, f"circuit opened for {open_min}min (restarts={len(recent)}/{max_n} in {window_min}min)"
+
+
+def _tail_lines(text: str, max_chars: int) -> str:
+    s = (text or "").strip()
+    if not s:
+        return ""
+    if len(s) <= max_chars:
+        return s
+    return s[-max_chars:]
+
+
+def _systemd_tail(unit: str) -> str:
+    n = _env_int("WATCHDOG_LOG_TAIL_LINES", 200)
+    rc, out = _run(["journalctl", "-u", unit, "-n", str(n), "--no-pager", "-o", "cat"])
+    if rc != 0:
+        return ""
+    return _tail_lines(out, _env_int("WATCHDOG_LOG_TAIL_MAX_CHARS", 6000))
+
+
+def _docker_tail(compose_dir: str, svc: str) -> str:
+    n = _env_int("WATCHDOG_LOG_TAIL_LINES", 200)
+    rc, out = _run(["docker", "compose", "logs", "--no-color", "--tail", str(n), svc], cwd=compose_dir)
+    if rc != 0:
+        return ""
+    return _tail_lines(out, _env_int("WATCHDOG_LOG_TAIL_MAX_CHARS", 6000))
+
+
+def _parse_checks(raw: str) -> list[str]:
+    return [x.strip() for x in (raw or "").split(",") if x.strip()]
+
+
+def _http_check(name: str, url: str) -> tuple[bool, str]:
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            code = int(getattr(resp, "status", 0) or 0)
+            if 200 <= code < 300:
+                return True, ""
+            return False, f"http {name} bad status={code} url={url}"
+    except Exception as e:
+        return False, f"http {name} error {type(e).__name__}: {e}"
+
+
+def _tcp_check(name: str, host: str, port: int) -> tuple[bool, str]:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(5.0)
+        try:
+            s.connect((host, int(port)))
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+        return True, ""
+    except Exception as e:
+        return False, f"tcp {name} error {type(e).__name__}: {e}"
+
+
+def _do_external_checks() -> tuple[bool, str]:
+    fails: list[str] = []
+    for item in _parse_checks(_env("WATCHDOG_HTTP_CHECKS", "")):
+        if ":" not in item:
+            continue
+        name, url = item.split(":", 1)
+        ok, reason = _http_check(name.strip(), url.strip())
+        if not ok:
+            fails.append(reason)
+    for item in _parse_checks(_env("WATCHDOG_TCP_CHECKS", "")):
+        parts = item.split(":")
+        if len(parts) < 3:
+            continue
+        name = parts[0].strip()
+        host = parts[1].strip()
+        try:
+            port = int(parts[2])
+        except Exception:
+            continue
+        ok, reason = _tcp_check(name, host, port)
+        if not ok:
+            fails.append(reason)
+    if _env("WATCHDOG_TG_CHECK", "0") == "1":
+        token = _env("BOT_TOKEN", "")
+        if token:
+            ok, reason = _http_check("tg", f"https://api.telegram.org/bot{token}/getMe")
+            if not ok:
+                fails.append(reason)
+        else:
+            fails.append("tg check enabled but BOT_TOKEN missing")
+    if _env("WATCHDOG_TRONGRID_CHECK", "0") == "1":
+        key = _env("TRONGRID_API_KEY", "")
+        addr = _env("RECEIVE_ADDRESS", "")
+        if addr:
+            try:
+                req = urllib.request.Request(f"https://api.trongrid.io/v1/accounts/{addr}", method="GET")
+                if key:
+                    req.add_header("TRON-PRO-API-KEY", key)
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    code = int(getattr(resp, "status", 0) or 0)
+                    if not (200 <= code < 300):
+                        fails.append(f"trongrid bad status={code}")
+            except Exception as e:
+                fails.append(f"trongrid error {type(e).__name__}: {e}")
+        else:
+            fails.append("trongrid check enabled but RECEIVE_ADDRESS missing")
+    if fails:
+        return False, "\n".join(fails)[:1200]
+    return True, ""
+
+
 def _systemd_check_and_fix(units: list[str], heartbeat_map: dict[str, str], project_dir: str, max_age_sec: int):
     print(f"[watchdog] mode=systemd units={units}")
+    st = _load_state()
     for unit in units:
         if not unit:
             continue
+        key = f"systemd:{unit}"
         rc, _ = _run(["systemctl", "is-active", unit])
+        need_restart = False
+        reason = ""
         if rc == 0:
             hb_rel = heartbeat_map.get(unit, "")
             if hb_rel:
@@ -152,33 +390,63 @@ def _systemd_check_and_fix(units: list[str], heartbeat_map: dict[str, str], proj
                 ok_hb, reason = _check_heartbeat(hb, max_age_sec)
                 if ok_hb:
                     print(f"[watchdog] {unit} active")
+                    _record_success(st, key)
                     continue
-                print(f"[watchdog] {unit} unhealthy -> restart ({reason})")
-                _tg_send(f"[watchdog] {unit} unhealthy, restarting...\n{reason}")
+                need_restart = True
             else:
                 print(f"[watchdog] {unit} active")
+                _record_success(st, key)
                 continue
         else:
-            print(f"[watchdog] {unit} not active -> restart")
-            _tg_send(f"[watchdog] {unit} not active, restarting...")
+            need_restart = True
+            reason = "not active"
+
+        if not need_restart:
+            continue
+
+        ok_restart, cb_reason = _circuit_allows_restart(st, key)
+        if not ok_restart:
+            _record_failure(st, key, cb_reason or reason)
+            tail = _systemd_tail(unit)
+            msg = f"[watchdog] {unit} {cb_reason or 'circuit open'}\nreason={reason}"
+            if tail:
+                msg = msg + "\n\n" + tail
+            _tg_send(msg[:3500])
+            continue
+
+        _record_failure(st, key, reason)
+        tail = _systemd_tail(unit)
+        msg = f"[watchdog] {unit} unhealthy, restarting...\nreason={reason}"
+        if tail and _env("WATCHDOG_INCLUDE_LOGS_ON", "fail") in ("always", "pre"):
+            msg = msg + "\n\n" + tail
+        _tg_send(msg[:3500])
         rc2, out2 = _run(["systemctl", "restart", unit])
+        _record_restart(st, key)
         time.sleep(2)
         rc3, _ = _run(["systemctl", "is-active", unit])
         if rc2 == 0 and rc3 == 0:
             print(f"[watchdog] {unit} restarted OK")
+            _record_success(st, key)
             _tg_send(f"[watchdog] {unit} restarted OK")
         else:
             print(f"[watchdog] {unit} restart FAILED: {out2[:200]}")
-            _tg_send(f"[watchdog] {unit} restart FAILED\n{out2[:800]}")
+            tail2 = _systemd_tail(unit)
+            msg2 = f"[watchdog] {unit} restart FAILED\n{out2[:800]}"
+            if tail2:
+                msg2 = msg2 + "\n\n" + tail2
+            _tg_send(msg2[:3500])
+    _save_state(st)
 
 
 def _docker_check_and_fix(compose_dir: str, services: list[str], heartbeat_map: dict[str, str], project_dir: str, max_age_sec: int):
     print(f"[watchdog] mode=docker compose_dir={compose_dir} services={services}")
     base = ["docker", "compose"]
     all_ok = True
+    st = _load_state()
     for svc in services:
         if not svc:
             continue
+        key = f"docker:{svc}"
         rc, out = _run(base + ["ps", svc, "--status", "running", "--services"], cwd=compose_dir)
         running = (rc == 0) and (svc in (out.splitlines() if out else []))
         if running:
@@ -188,30 +456,71 @@ def _docker_check_and_fix(compose_dir: str, services: list[str], heartbeat_map: 
                 ok_hb, reason = _check_heartbeat(hb, max_age_sec)
                 if ok_hb:
                     print(f"[watchdog] {svc} running")
+                    _record_success(st, key)
                     continue
                 all_ok = False
                 print(f"[watchdog] {svc} unhealthy -> up -d --force-recreate ({reason})")
-                _tg_send(f"[watchdog] docker service {svc} unhealthy, restarting...\n{reason}")
+                ok_restart, cb_reason = _circuit_allows_restart(st, key)
+                if not ok_restart:
+                    _record_failure(st, key, cb_reason or reason)
+                    tail = _docker_tail(compose_dir, svc)
+                    msg = f"[watchdog] docker service {svc} {cb_reason or 'circuit open'}\nreason={reason}"
+                    if tail:
+                        msg = msg + "\n\n" + tail
+                    _tg_send(msg[:3500])
+                    continue
+                _record_failure(st, key, reason)
+                tail = _docker_tail(compose_dir, svc)
+                msg = f"[watchdog] docker service {svc} unhealthy, restarting...\n{reason}"
+                if tail and _env("WATCHDOG_INCLUDE_LOGS_ON", "fail") in ("always", "pre"):
+                    msg = msg + "\n\n" + tail
+                _tg_send(msg[:3500])
             else:
                 print(f"[watchdog] {svc} running")
+                _record_success(st, key)
                 continue
         all_ok = False
         print(f"[watchdog] {svc} not running -> up -d --force-recreate")
-        _tg_send(f"[watchdog] docker service {svc} not running, restarting...")
+        ok_restart, cb_reason = _circuit_allows_restart(st, key)
+        if not ok_restart:
+            _record_failure(st, key, cb_reason or "not running")
+            tail = _docker_tail(compose_dir, svc)
+            msg = f"[watchdog] docker service {svc} {cb_reason or 'circuit open'}\nreason=not running"
+            if tail:
+                msg = msg + "\n\n" + tail
+            _tg_send(msg[:3500])
+            continue
+        _record_failure(st, key, "not running")
+        tail = _docker_tail(compose_dir, svc)
+        msg = f"[watchdog] docker service {svc} not running, restarting..."
+        if tail and _env("WATCHDOG_INCLUDE_LOGS_ON", "fail") in ("always", "pre"):
+            msg = msg + "\n\n" + tail
+        _tg_send(msg[:3500])
         rc2, out2 = _run(base + ["up", "-d", "--force-recreate", svc], cwd=compose_dir)
+        _record_restart(st, key)
         time.sleep(2)
         rc3, out3 = _run(base + ["ps", svc, "--status", "running", "--services"], cwd=compose_dir)
         running2 = (rc3 == 0) and (svc in (out3.splitlines() if out3 else []))
         if rc2 == 0 and running2:
             print(f"[watchdog] {svc} restarted OK")
+            _record_success(st, key)
             _tg_send(f"[watchdog] docker service {svc} restarted OK")
         else:
             print(f"[watchdog] {svc} restart FAILED: {out2[:200]}")
-            _tg_send(f"[watchdog] docker service {svc} restart FAILED\n{out2[:800]}")
+            tail2 = _docker_tail(compose_dir, svc)
+            msg2 = f"[watchdog] docker service {svc} restart FAILED\n{out2[:800]}"
+            if tail2:
+                msg2 = msg2 + "\n\n" + tail2
+            _tg_send(msg2[:3500])
             all_ok = False
 
     if all_ok:
-        _maybe_notify_ok()
+        ok_ext, ext_reason = _do_external_checks()
+        if not ok_ext:
+            _tg_send(f"[watchdog] external checks FAILED\n{ext_reason}"[:3500])
+        else:
+            _maybe_notify_ok()
+    _save_state(st)
 
 
 def _auto_mode() -> str:

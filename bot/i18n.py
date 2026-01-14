@@ -187,6 +187,25 @@ TEXTS: Dict[str, Dict[str, str]] = {
         ),
     },
 
+    "expired_recall_notice": {
+        "zh": (
+            "🔔 会员已到期提醒（已过期 {days} 天）\n\n"
+            "想恢复访问：直接输入 /plans 查看套餐并按提示充值，系统会自动续期并重新发入群链接。"
+        ),
+        "en": (
+            "🔔 Your membership has expired ({days} day(s) ago)\n\n"
+            "To restore access, type /plans and follow the payment instructions. The system will reactivate and resend the invite link automatically."
+        ),
+        "km": (
+            "🔔 សមាជិកភាពរបស់អ្នកបានផុតកំណត់ ({days} ថ្ងៃមុន)\n\n"
+            "ដើម្បីបើកឡើងវិញ សូមវាយ /plans ហើយធ្វើតាមការណែនាំទូទាត់។ ប្រព័ន្ធនឹងបន្តស្វ័យប្រវត្តិ និងផ្ញើតំណចូលឆានែលឡើងវិញ។"
+        ),
+        "vi": (
+            "🔔 Gói thành viên của bạn đã hết hạn ({days} ngày trước)\n\n"
+            "Để kích hoạt lại, hãy gõ /plans và làm theo hướng dẫn thanh toán. Hệ thống sẽ tự gia hạn và gửi lại link vào kênh."
+        ),
+    },
+
     "expiring_soon_notice": {
         "zh": (
             "⏳ 会员即将到期提醒\n\n"

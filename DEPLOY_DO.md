@@ -37,10 +37,19 @@ cd /opt/pvbot/usdt_telegram_membership
 git clone https://github.com/<你的账号>/<你的仓库>.git .
 ```
 
-## 4）准备 .env（不要提交到 GitHub）
+## 4）准备配置文件（不要提交敏感信息到 GitHub）
 
 ```bash
 cp .env.example .env
+```
+
+推荐做法（减少每次更新都要核对 `.env`）：
+- 非敏感配置：放到 `config/app_config.json`
+- 敏感配置（token/密码/session）：放到 `.env.secrets`
+
+```bash
+cp config/app_config.example.json config/app_config.json
+cp .env.secrets.example .env.secrets
 ```
 
 建议配置：

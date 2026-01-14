@@ -24,9 +24,15 @@ from config import (
     HEALTH_ALERT_ENABLE,
     HEALTH_ALERT_DEPOSIT_STALE_MINUTES,
     HEALTH_ALERT_MIN_INTERVAL_MINUTES,
+    EXPIRING_REMIND_ENABLE,
+    EXPIRING_REMIND_DAYS,
+    EXPIRED_RECALL_ENABLE,
+    EXPIRED_RECALL_DAYS,
     JOIN_REQUEST_ENABLE,
     JOIN_REQUEST_LINK_EXPIRE_HOURS,
     HEARTBEAT_FILE,
+    MATCH_ORDER_LOOKBACK_HOURS,
+    MATCH_ORDER_PREFER_RECENT,
 )
 from core.models import (
     get_all_users,
@@ -35,6 +41,7 @@ from core.models import (
     mark_user_expired_handled,
     get_users_expiring_within_days,
     mark_user_reminded,
+    get_expired_users_for_recall,
     get_user,
     get_inviter_id,
     add_invite_reward,
@@ -44,6 +51,7 @@ from core.models import (
     get_unassigned_usdt_txs_since,
     get_address_assigned_at,
     match_pending_order_by_amount,
+    match_pending_order_by_amount_v2,
     mark_order_success,
     get_success_orders_between,
 )
@@ -198,7 +206,15 @@ async def check_deposits_job(context: ContextTypes.DEFAULT_TYPE):
             tx_id = tx["tx_id"]
             tx_amount = Decimal(str(tx.get("amount") or 0))
 
-            order = match_pending_order_by_amount(addr, tx_amount, eps)
+            tx_time = tx.get("block_time") or tx.get("created_at") or None
+            order = match_pending_order_by_amount_v2(
+                addr=addr,
+                amount=tx_amount,
+                eps=eps,
+                tx_time=tx_time,
+                lookback_hours=int(MATCH_ORDER_LOOKBACK_HOURS),
+                prefer_recent=bool(MATCH_ORDER_PREFER_RECENT),
+            )
             if not order:
                 set_usdt_tx_status(tx_id, "unmatched")
                 continue
@@ -314,7 +330,15 @@ async def check_deposits_job(context: ContextTypes.DEFAULT_TYPE):
             tx_id = tx["tx_id"]
             tx_amount = Decimal(str(tx.get("amount") or 0))
 
-            order = match_pending_order_by_amount(addr, tx_amount, eps)
+            tx_time = tx.get("block_time") or tx.get("created_at") or None
+            order = match_pending_order_by_amount_v2(
+                addr=addr,
+                amount=tx_amount,
+                eps=eps,
+                tx_time=tx_time,
+                lookback_hours=int(MATCH_ORDER_LOOKBACK_HOURS),
+                prefer_recent=bool(MATCH_ORDER_PREFER_RECENT),
+            )
             if not order:
                 set_usdt_tx_status(tx_id, "unmatched")
                 continue
@@ -427,10 +451,31 @@ async def check_expired_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def check_expiring_job(context: ContextTypes.DEFAULT_TYPE):
+    if not EXPIRING_REMIND_ENABLE:
+        return
     bot = context.bot
     now = datetime.utcnow()
 
-    for days, col in ((3, "remind_3d_at"), (1, "remind_1d_at")):
+    def _parse_days(raw: str) -> list[int]:
+        out = []
+        for x in (raw or "").replace("\n", ",").split(","):
+            x = (x or "").strip()
+            if not x:
+                continue
+            try:
+                v = int(x)
+            except Exception:
+                continue
+            if v > 0 and v not in out:
+                out.append(v)
+        out.sort(reverse=True)
+        return out
+
+    col_map = {7: "remind_7d_at", 3: "remind_3d_at", 1: "remind_1d_at"}
+    for days in _parse_days(EXPIRING_REMIND_DAYS):
+        col = col_map.get(int(days))
+        if not col:
+            continue
         users = get_users_expiring_within_days(now, days, col)
         for u in users:
             telegram_id = u["telegram_id"]
@@ -449,6 +494,44 @@ async def check_expiring_job(context: ContextTypes.DEFAULT_TYPE):
                 mark_user_reminded(telegram_id, col, now)
             except Exception as e:
                 logger.warning(f"[check_expiring] 提醒失败 uid={telegram_id}: {e}")
+
+
+async def expired_recall_job(context: ContextTypes.DEFAULT_TYPE):
+    if not EXPIRED_RECALL_ENABLE:
+        return
+    bot = context.bot
+    now = datetime.utcnow()
+
+    def _parse_days(raw: str) -> list[int]:
+        out = []
+        for x in (raw or "").replace("\n", ",").split(","):
+            x = (x or "").strip()
+            if not x:
+                continue
+            try:
+                v = int(x)
+            except Exception:
+                continue
+            if v > 0 and v not in out:
+                out.append(v)
+        out.sort()
+        return out
+
+    col_map = {1: "expired_recall_1d_at", 3: "expired_recall_3d_at", 7: "expired_recall_7d_at"}
+    for days_after in _parse_days(EXPIRED_RECALL_DAYS):
+        col = col_map.get(int(days_after))
+        if not col:
+            continue
+        users = get_expired_users_for_recall(now, days_after, col)
+        for u in users:
+            telegram_id = u["telegram_id"]
+            lang = normalize_lang(u.get("language") or "en")
+            try:
+                msg = t(lang, "expired_recall_notice", days=days_after)
+                await bot.send_message(chat_id=telegram_id, text=msg)
+                mark_user_reminded(telegram_id, col, now)
+            except Exception as e:
+                logger.warning(f"[expired_recall] 召回失败 uid={telegram_id}: {e}")
 
 
 async def health_alert_job(context: ContextTypes.DEFAULT_TYPE):

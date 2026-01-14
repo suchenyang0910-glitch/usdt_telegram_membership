@@ -6,6 +6,22 @@
 2）如使用 compose 自带 MySQL，把 `.env` 里的 `DB_HOST` 改为 `mysql`，并保持 `DB_USER/DB_PASS/DB_NAME` 与 `docker-compose.yml` 一致  
 3）启动
 
+建议做法（减少每次更新都要核对 `.env`）：
+- 非敏感配置（频道/开关/阈值等）：放到 `config/app_config.json`（可选）
+- 敏感配置（token/密码/session 等）：放到 `.env.secrets`（可选，优先级高于 `.env`）
+
+仍建议放在 `.env` 的关键配置（更稳定且更直观）：
+- `BOT_TOKEN/BOT_USERNAME`
+- `PAID_CHANNEL_ID/HIGHLIGHT_CHANNEL_ID/FREE_CHANNEL_ID_1/2`
+- 支付/钱包相关：`TRONGRID_API_KEY`、`PAYMENT_MODE`、`RECEIVE_ADDRESS`、`USDT_ADDRESS_POOL` 等
+- 数据库相关：`DB_HOST/DB_PORT/DB_USER/DB_PASS/DB_NAME`、`MYSQL_*`（compose）
+
+`config/app_config.json`：
+- 从 [app_config.example.json](file:///d:/VScode/usdt_telegram_membership/config/app_config.example.json) 复制为 `config/app_config.json` 后修改
+
+`.env.secrets`：
+- 从 [\.env.secrets.example](file:///d:/VScode/usdt_telegram_membership/.env.secrets.example) 复制为 `.env.secrets` 后填写
+
 ```bash
 cd deploy
 docker compose up -d --build

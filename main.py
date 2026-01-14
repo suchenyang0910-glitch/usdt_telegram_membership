@@ -27,6 +27,7 @@ from bot.scheduler import (
     check_deposits_job,
     check_expired_job,
     check_expiring_job,
+    expired_recall_job,
     cleanup_logs_job,
     hourly_admin_report_job,
     cleanup_downloads_job,
@@ -78,6 +79,7 @@ def main():
     app.job_queue.run_repeating(check_deposits_job, interval=60, first=10)
     app.job_queue.run_repeating(check_expired_job, interval=3600, first=60)
     app.job_queue.run_repeating(check_expiring_job, interval=3600, first=120)
+    app.job_queue.run_repeating(expired_recall_job, interval=3600, first=180)
     app.job_queue.run_repeating(cleanup_logs_job, interval=21600, first=300)
     app.job_queue.run_repeating(hourly_admin_report_job, interval=3600, first=600)
     app.job_queue.run_repeating(health_alert_job, interval=300, first=120)

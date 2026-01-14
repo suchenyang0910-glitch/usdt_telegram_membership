@@ -212,9 +212,13 @@ def init_tables():
         conn,
         "users",
         {
+            "remind_7d_at": "remind_7d_at DATETIME NULL",
             "remind_3d_at": "remind_3d_at DATETIME NULL",
             "remind_1d_at": "remind_1d_at DATETIME NULL",
             "expired_handled_at": "expired_handled_at DATETIME NULL",
+            "expired_recall_1d_at": "expired_recall_1d_at DATETIME NULL",
+            "expired_recall_3d_at": "expired_recall_3d_at DATETIME NULL",
+            "expired_recall_7d_at": "expired_recall_7d_at DATETIME NULL",
             "first_source": "first_source VARCHAR(64) NULL",
             "first_source_at": "first_source_at DATETIME NULL",
             "last_source": "last_source VARCHAR(64) NULL",
@@ -682,6 +686,27 @@ def mark_user_reminded(telegram_id: int, reminder_column: str, reminded_at: date
     cur.close(); conn.close()
 
 
+def get_expired_users_for_recall(now: datetime, days_after: int, recall_column: str) -> List[Dict]:
+    days_after = int(days_after or 0)
+    if days_after <= 0:
+        return []
+    cutoff = now - timedelta(days=days_after)
+    conn = get_conn(); cur = conn.cursor(dictionary=True)
+    cur.execute(
+        f"""
+        SELECT * FROM users
+        WHERE paid_until IS NOT NULL
+          AND paid_until <= %s
+          AND paid_until <= %s
+          AND {recall_column} IS NULL
+        """,
+        (now, cutoff),
+    )
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return rows
+
+
 # ------------ 订单 ------------
 
 def create_order(telegram_id: int, addr: str, amount: Decimal,
@@ -831,18 +856,44 @@ def create_pending_order_priced(
 
 
 def match_pending_order_by_amount(addr: str, amount: Decimal, eps: Decimal) -> Optional[Dict]:
+    from config import MATCH_ORDER_LOOKBACK_HOURS, MATCH_ORDER_PREFER_RECENT
+    return match_pending_order_by_amount_v2(
+        addr=addr,
+        amount=amount,
+        eps=eps,
+        tx_time=None,
+        lookback_hours=int(MATCH_ORDER_LOOKBACK_HOURS),
+        prefer_recent=bool(MATCH_ORDER_PREFER_RECENT),
+    )
+
+
+def match_pending_order_by_amount_v2(
+    addr: str,
+    amount: Decimal,
+    eps: Decimal,
+    tx_time: datetime | None,
+    lookback_hours: int,
+    prefer_recent: bool,
+) -> Optional[Dict]:
     conn = get_conn(); cur = conn.cursor(dictionary=True)
     low = amount - eps
     high = amount + eps
+    lookback_hours = max(1, min(int(lookback_hours or 0), 720))
+    where = ["addr=%s", "status='pending'", "amount BETWEEN %s AND %s", f"created_at >= (UTC_TIMESTAMP() - INTERVAL {lookback_hours} HOUR)"]
+    params: list = [addr, str(low), str(high)]
+    if tx_time:
+        where.append("created_at <= %s")
+        params.append(tx_time)
+    order_by = "created_at DESC" if prefer_recent else "created_at ASC"
     cur.execute(
-        """
+        f"""
         SELECT *
         FROM orders
-        WHERE addr=%s AND status='pending' AND amount BETWEEN %s AND %s
-        ORDER BY created_at ASC
+        WHERE {' AND '.join(where)}
+        ORDER BY {order_by}
         LIMIT 1
         """,
-        (addr, str(low), str(high)),
+        tuple(params),
     )
     row = cur.fetchone()
     cur.close(); conn.close()

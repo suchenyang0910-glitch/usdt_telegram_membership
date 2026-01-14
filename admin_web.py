@@ -8,29 +8,40 @@ import socket
 import threading
 import time
 from datetime import datetime, timedelta
+from decimal import Decimal
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import ipaddress
 from urllib.parse import parse_qs, urlparse
 from urllib import request as urlrequest
 from urllib import parse as urlparse2
 
 from config import (
+    AMOUNT_EPS,
     ADMIN_WEB_ACTIONS_ENABLE,
     ADMIN_WEB_ENABLE,
+    ADMIN_WEB_ALLOW_IPS,
     ADMIN_WEB_HOST,
     ADMIN_WEB_PASS,
     ADMIN_WEB_PORT,
+    ADMIN_WEB_RO_PASS,
+    ADMIN_WEB_RO_USER,
+    ADMIN_WEB_TRUST_PROXY,
     ADMIN_WEB_USER,
     BOT_TOKEN,
     BROADCAST_ABORT_FAIL_RATE,
     BROADCAST_ABORT_MIN_SENT,
     BROADCAST_SLEEP_SEC,
+    HEARTBEAT_FILE,
+    HEARTBEAT_USERBOT_FILE,
     JOIN_REQUEST_ENABLE,
     JOIN_REQUEST_LINK_EXPIRE_HOURS,
     PAID_CHANNEL_ID,
+    PLANS,
 )
 from core.db import get_conn
-from core.models import init_tables
+from core.models import init_tables, get_user, update_user_payment, mark_order_success, set_usdt_tx_status
+from bot.payments import compute_new_paid_until
 
 
 def _utc_now() -> datetime:
@@ -51,8 +62,6 @@ def _csv_bytes(rows: list[dict], cols: list[str]) -> bytes:
 
 
 def _basic_auth_ok(headers) -> bool:
-    if not ADMIN_WEB_USER or not ADMIN_WEB_PASS:
-        return False
     v = headers.get("Authorization", "")
     if not v.startswith("Basic "):
         return False
@@ -63,7 +72,75 @@ def _basic_auth_ok(headers) -> bool:
     if ":" not in raw:
         return False
     u, p = raw.split(":", 1)
-    return secrets.compare_digest(u, ADMIN_WEB_USER) and secrets.compare_digest(p, ADMIN_WEB_PASS)
+    if ADMIN_WEB_USER and ADMIN_WEB_PASS and secrets.compare_digest(u, ADMIN_WEB_USER) and secrets.compare_digest(p, ADMIN_WEB_PASS):
+        return True
+    if ADMIN_WEB_RO_USER and ADMIN_WEB_RO_PASS and secrets.compare_digest(u, ADMIN_WEB_RO_USER) and secrets.compare_digest(p, ADMIN_WEB_RO_PASS):
+        return True
+    return False
+
+
+def _basic_auth_identity(headers) -> tuple[str, str] | None:
+    v = headers.get("Authorization", "")
+    if not v.startswith("Basic "):
+        return None
+    try:
+        raw = base64.b64decode(v.split(" ", 1)[1].strip()).decode("utf-8", errors="ignore")
+    except Exception:
+        return None
+    if ":" not in raw:
+        return None
+    u, p = raw.split(":", 1)
+    if ADMIN_WEB_USER and ADMIN_WEB_PASS and secrets.compare_digest(u, ADMIN_WEB_USER) and secrets.compare_digest(p, ADMIN_WEB_PASS):
+        return (u, "admin")
+    if ADMIN_WEB_RO_USER and ADMIN_WEB_RO_PASS and secrets.compare_digest(u, ADMIN_WEB_RO_USER) and secrets.compare_digest(p, ADMIN_WEB_RO_PASS):
+        return (u, "readonly")
+    return None
+
+
+def _parse_allow_ips(raw: str) -> list[ipaddress._BaseNetwork]:
+    out: list[ipaddress._BaseNetwork] = []
+    s = (raw or "").strip()
+    if not s:
+        return out
+    for part in s.replace("\n", ",").split(","):
+        part = (part or "").strip()
+        if not part:
+            continue
+        try:
+            if "/" in part:
+                out.append(ipaddress.ip_network(part, strict=False))
+            else:
+                out.append(ipaddress.ip_network(part + "/32", strict=False))
+        except Exception:
+            continue
+    return out
+
+
+_ALLOW_IPS = _parse_allow_ips(ADMIN_WEB_ALLOW_IPS)
+
+
+def _client_ip(handler: BaseHTTPRequestHandler) -> str:
+    if ADMIN_WEB_TRUST_PROXY:
+        xf = (handler.headers.get("X-Forwarded-For") or "").strip()
+        if xf:
+            return xf.split(",")[0].strip()
+    return str(handler.client_address[0] or "")
+
+
+def _ip_allowed(ip: str) -> bool:
+    if not _ALLOW_IPS:
+        return True
+    try:
+        addr = ipaddress.ip_address(ip)
+    except Exception:
+        return False
+    for n in _ALLOW_IPS:
+        try:
+            if addr in n:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _html_escape(s: str) -> str:
@@ -207,6 +284,20 @@ INDEX_HTML = """<!doctype html>
     <button onclick="exportAudit()">导出审计(7d)</button>
   </div>
 
+  <h3>对账工具</h3>
+  <div class="row">
+    <input id="rePendingMin" placeholder="pending 超过分钟(默认60)" style="min-width:240px" />
+    <button onclick="loadReconcile()">刷新</button>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <input id="reTxId" placeholder="tx_id" style="min-width:360px" />
+    <input id="reOrderId" placeholder="order_id" style="min-width:200px" />
+    <input id="reNote" placeholder="备注(可选)" style="min-width:320px" />
+    <button onclick="assignReconcile()">人工绑定</button>
+    <button onclick="retryTxMatch()">重试自动匹配(tx)</button>
+  </div>
+  <div id="reconcile"></div>
+
   <h3>最近订单</h3>
   <div class="row">
     <button onclick="loadOrders()">刷新</button>
@@ -237,6 +328,8 @@ function cardsHtml(s){
     ["地址池占用", s.addr_assigned + "/" + s.addr_total],
     ["订单(24h)", s.orders_24h],
     ["最后入账", s.last_credited_at || "—"],
+    ["App 心跳", (s.hb_app_age_sec==null ? "—" : (s.hb_app_age_sec + "s"))],
+    ["Userbot 心跳", (s.hb_userbot_age_sec==null ? "—" : (s.hb_userbot_age_sec + "s"))],
   ];
   return items.map(([k,v]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
 }
@@ -450,11 +543,40 @@ async function loadOrders(){
   document.getElementById("orders").innerHTML = tableHtml(data.items);
 }
 
+async function loadReconcile(){
+  const mins = parseInt((document.getElementById("rePendingMin").value.trim()||"60"),10);
+  const data = await jget("/api/reconcile?pending_min=" + encodeURIComponent(mins) + "&limit=50");
+  const blocks = [];
+  blocks.push("<h4>未匹配/待处理入账</h4>" + tableHtml(data.unmatched_txs||[]));
+  blocks.push("<h4>超时 pending 订单</h4>" + tableHtml(data.pending_orders||[]));
+  document.getElementById("reconcile").innerHTML = blocks.join("");
+}
+
+async function assignReconcile(){
+  const tx_id = document.getElementById("reTxId").value.trim();
+  const order_id = document.getElementById("reOrderId").value.trim();
+  const note = document.getElementById("reNote").value.trim();
+  if(!tx_id || !order_id){ return; }
+  await jpost("/api/reconcile_assign", {tx_id, order_id: parseInt(order_id,10), note});
+  document.getElementById("opResult").innerText = "完成：已人工绑定并记账";
+  await loadReconcile();
+}
+
+async function retryTxMatch(){
+  const tx_id = document.getElementById("reTxId").value.trim();
+  const note = document.getElementById("reNote").value.trim();
+  if(!tx_id){ return; }
+  const r = await jpost("/api/reconcile_retry_tx", {tx_id, note});
+  document.getElementById("opResult").innerText = "重试结果：" + (r.ok ? "ok" : "fail") + (r.error ? (" " + r.error) : "");
+  await loadReconcile();
+}
+
 loadStats();
 loadOrders();
 loadCoupons();
 loadAccessCodes();
 loadBroadcasts();
+loadReconcile();
 </script>
 </body>
 </html>
@@ -463,6 +585,9 @@ loadBroadcasts();
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "PVAdmin/1.0"
+
+    def _forbidden(self, msg: str = "forbidden"):
+        self._send(HTTPStatus.FORBIDDEN, (msg or "forbidden").encode("utf-8"), "text/plain; charset=utf-8")
 
     def _send(self, code: int, body: bytes, ctype: str):
         self.send_response(code)
@@ -487,16 +612,26 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _require_auth(self) -> bool:
-        if _basic_auth_ok(self.headers):
-            return True
-        self._unauthorized()
-        return False
+        ip = _client_ip(self)
+        if not _ip_allowed(ip):
+            self._forbidden("ip not allowed")
+            return False
+        ident = _basic_auth_identity(self.headers)
+        if not ident:
+            self._unauthorized()
+            return False
+        self._auth_user, self._auth_role = ident
+        self._auth_ip = ip
+        return True
 
     def do_GET(self):
         u = urlparse(self.path)
         path = u.path
 
         if path == "/health":
+            ip = _client_ip(self)
+            if not _ip_allowed(ip):
+                return self._forbidden("ip not allowed")
             body = _json_bytes({"ok": True, "ts": _utc_now().isoformat()})
             return self._send(200, body, "application/json; charset=utf-8")
 
@@ -561,6 +696,18 @@ class Handler(BaseHTTPRequestHandler):
             source = (qs.get("source", [""])[0] or "").strip()
             targets = _pick_broadcast_targets(segment, source or None)
             body = _json_bytes({"count": len(targets), "sample": targets[:10]})
+            return self._send(200, body, "application/json; charset=utf-8")
+
+        if path == "/api/reconcile":
+            qs = parse_qs(u.query)
+            pending_min = int((qs.get("pending_min", ["60"])[0] or "60"))
+            limit = int((qs.get("limit", ["50"])[0] or "50"))
+            body = _json_bytes(
+                {
+                    "unmatched_txs": list_unmatched_txs(limit=limit),
+                    "pending_orders": list_pending_orders_older(minutes=pending_min, limit=limit),
+                }
+            )
             return self._send(200, body, "application/json; charset=utf-8")
 
         if path == "/api/export/users.csv":
@@ -632,6 +779,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if not self._require_auth():
             return
+        if getattr(self, "_auth_role", "") != "admin":
+            return self._send(403, b"readonly", "text/plain; charset=utf-8")
         if not ADMIN_WEB_ACTIONS_ENABLE:
             return self._send(403, b"actions disabled", "text/plain; charset=utf-8")
 
@@ -645,19 +794,19 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             data = {}
 
-        actor = ADMIN_WEB_USER
+        actor = getattr(self, "_auth_user", ADMIN_WEB_USER)
         if path == "/api/user_extend":
             telegram_id = int(str(data.get("telegram_id") or "0"))
             days = int(data.get("days") or 0)
             note = (data.get("note") or "").strip()
-            paid_until = user_extend_days(telegram_id, days, actor=actor, note=note, ip=self.client_address[0])
+            paid_until = user_extend_days(telegram_id, days, actor=actor, note=note, ip=getattr(self, "_auth_ip", self.client_address[0]))
             body = _json_bytes({"ok": True, "paid_until": paid_until})
             return self._send(200, body, "application/json; charset=utf-8")
 
         if path == "/api/user_resend_invite":
             telegram_id = int(str(data.get("telegram_id") or "0"))
             note = (data.get("note") or "").strip()
-            ok, err = resend_invite_link(telegram_id, actor=actor, note=note, ip=self.client_address[0])
+            ok, err = resend_invite_link(telegram_id, actor=actor, note=note, ip=getattr(self, "_auth_ip", self.client_address[0]))
             code = 200 if ok else 500
             body = _json_bytes({"ok": ok, "error": err})
             return self._send(code, body, "application/json; charset=utf-8")
@@ -752,9 +901,26 @@ class Handler(BaseHTTPRequestHandler):
             telegram_id = int(str(data.get("telegram_id") or "0"))
             toggle = (data.get("toggle") or "").strip()
             note = (data.get("note") or "").strip()
-            res = user_toggle_flags(telegram_id, toggle=toggle, note=note, actor=actor, ip=self.client_address[0])
+            res = user_toggle_flags(telegram_id, toggle=toggle, note=note, actor=actor, ip=getattr(self, "_auth_ip", self.client_address[0]))
             body = _json_bytes({"ok": True, **res})
             return self._send(200, body, "application/json; charset=utf-8")
+
+        if path == "/api/reconcile_assign":
+            tx_id = (data.get("tx_id") or "").strip()
+            order_id = int(data.get("order_id") or 0)
+            note = (data.get("note") or "").strip()
+            ok, err = reconcile_assign(tx_id=tx_id, order_id=order_id, actor=actor, note=note, ip=getattr(self, "_auth_ip", self.client_address[0]))
+            code = 200 if ok else 400
+            body = _json_bytes({"ok": ok, "error": err})
+            return self._send(code, body, "application/json; charset=utf-8")
+
+        if path == "/api/reconcile_retry_tx":
+            tx_id = (data.get("tx_id") or "").strip()
+            note = (data.get("note") or "").strip()
+            ok, err = reconcile_retry_tx(tx_id=tx_id, actor=actor, note=note, ip=getattr(self, "_auth_ip", self.client_address[0]))
+            code = 200 if ok else 400
+            body = _json_bytes({"ok": ok, "error": err})
+            return self._send(code, body, "application/json; charset=utf-8")
 
         self._send(404, b"not found", "text/plain; charset=utf-8")
 
@@ -810,6 +976,25 @@ def _audit(actor: str, action: str, target_id: int | None, payload: dict):
     )
 
 
+def _read_heartbeat(path: str) -> dict:
+    p = (path or "").strip()
+    if not p:
+        return {"ok": False, "age_sec": None}
+    try:
+        if not os.path.exists(p):
+            return {"ok": False, "age_sec": None}
+        age = int(time.time() - os.path.getmtime(p))
+        data = None
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f) or {}
+        except Exception:
+            data = {}
+        return {"ok": age < 600, "age_sec": age, "ts": data.get("ts"), "iso": data.get("iso")}
+    except Exception:
+        return {"ok": False, "age_sec": None}
+
+
 def stats() -> dict:
     users_total = int(_q_one("SELECT COUNT(*) FROM users") or 0)
     active_members = int(_q_one("SELECT COUNT(*) FROM users WHERE paid_until IS NOT NULL AND paid_until > UTC_TIMESTAMP()") or 0)
@@ -830,6 +1015,8 @@ def stats() -> dict:
         or 0
     )
     last_credited_at = _q_one("SELECT MAX(processed_at) FROM usdt_txs WHERE status IN ('processed','credited')") or None
+    hb_app = _read_heartbeat(HEARTBEAT_FILE)
+    hb_userbot = _read_heartbeat(HEARTBEAT_USERBOT_FILE)
 
     return {
         "users_total": users_total,
@@ -841,6 +1028,8 @@ def stats() -> dict:
         "amount_24h": str(amount_24h),
         "payers_24h": payers_24h,
         "last_credited_at": last_credited_at,
+        "hb_app_age_sec": hb_app.get("age_sec"),
+        "hb_userbot_age_sec": hb_userbot.get("age_sec"),
     }
 
 
@@ -882,6 +1071,175 @@ def list_txs(hours: int, limit: int) -> list[dict]:
         LIMIT %s
     """
     return _q_all(sql, (hours, limit))
+
+
+def list_unmatched_txs(limit: int) -> list[dict]:
+    limit = max(1, min(int(limit), 2000))
+    sql = """
+        SELECT tx_id, telegram_id, addr, from_addr, amount, status, plan_code, credited_amount, processed_at, block_time, created_at
+        FROM usdt_txs
+        WHERE (telegram_id IS NULL OR telegram_id=0)
+          AND status IN ('seen','unmatched')
+        ORDER BY created_at DESC
+        LIMIT %s
+    """
+    return _q_all(sql, (limit,))
+
+
+def list_pending_orders_older(minutes: int, limit: int) -> list[dict]:
+    minutes = max(1, min(int(minutes), 43200))
+    limit = max(1, min(int(limit), 2000))
+    sql = """
+        SELECT id, telegram_id, addr, amount, base_amount, discount_amount, coupon_code, plan_code, status, created_at
+        FROM orders
+        WHERE status='pending'
+          AND created_at <= (UTC_TIMESTAMP() - INTERVAL %s MINUTE)
+        ORDER BY created_at ASC
+        LIMIT %s
+    """
+    return _q_all(sql, (minutes, limit))
+
+
+def _plan_by_code(code: str) -> dict | None:
+    c = (code or "").strip()
+    for p in PLANS:
+        if (p.get("code") or "").strip() == c:
+            return p
+    return None
+
+
+def reconcile_assign(tx_id: str, order_id: int, actor: str, note: str, ip: str) -> tuple[bool, str]:
+    tx_id = (tx_id or "").strip()
+    order_id = int(order_id or 0)
+    if not tx_id or order_id <= 0:
+        return False, "bad params"
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT * FROM usdt_txs WHERE tx_id=%s LIMIT 1", (tx_id,))
+        tx = cur.fetchone()
+        cur.execute("SELECT * FROM orders WHERE id=%s LIMIT 1", (order_id,))
+        order = cur.fetchone()
+        if not tx or not order:
+            return False, "tx/order not found"
+        if (order.get("status") or "") != "pending":
+            return False, "order not pending"
+        if (tx.get("status") or "") not in ("seen", "unmatched"):
+            return False, "tx status not eligible"
+        if tx.get("telegram_id"):
+            return False, "tx already assigned"
+
+        addr = str(order.get("addr") or "")
+        if addr and str(tx.get("addr") or "") and str(tx.get("addr") or "") != addr:
+            return False, "addr mismatch"
+
+        try:
+            tx_amount = Decimal(str(tx.get("amount") or "0"))
+            order_amount = Decimal(str(order.get("amount") or "0"))
+        except Exception:
+            return False, "bad amount"
+        eps = Decimal(str(AMOUNT_EPS))
+        if abs(tx_amount - order_amount) > eps:
+            return False, f"amount mismatch tx={tx_amount} order={order_amount}"
+
+        telegram_id = int(order.get("telegram_id") or 0)
+        user = get_user(telegram_id) if telegram_id else None
+        if not user:
+            return False, "user not found"
+
+        plan_code = str(order.get("plan_code") or "").strip()
+        plan = _plan_by_code(plan_code)
+        if not plan:
+            return False, "plan not found"
+
+        now = datetime.utcnow()
+        old_paid_until = user.get("paid_until")
+        new_paid_until = compute_new_paid_until(old_paid_until, [plan])
+        total_old = Decimal(str(user.get("total_received") or 0))
+        total_new = total_old + tx_amount
+
+        cur2 = conn.cursor()
+        cur2.execute(
+            """
+            UPDATE users
+            SET paid_until=%s, total_received=%s, last_plan=%s
+            WHERE telegram_id=%s
+            """,
+            (new_paid_until, str(total_new), plan_code, telegram_id),
+        )
+        cur2.execute("UPDATE orders SET status='success', tx_id=%s WHERE id=%s", (tx_id, order_id))
+        cur2.execute(
+            """
+            UPDATE usdt_txs
+            SET status='processed', telegram_id=%s, plan_code=%s, credited_amount=%s, processed_at=%s
+            WHERE tx_id=%s
+            """,
+            (telegram_id, plan_code, str(Decimal(str(plan.get("price")))), now, tx_id),
+        )
+        cur2.execute("SELECT coupon_code, coupon_used FROM orders WHERE id=%s LIMIT 1", (order_id,))
+        row = cur2.fetchone()
+        if row:
+            coupon_code = row[0]
+            coupon_used = int(row[1] or 0)
+            if coupon_code and coupon_used == 0:
+                cur2.execute("UPDATE orders SET coupon_used=1 WHERE id=%s", (order_id,))
+                cur2.execute("UPDATE coupons SET used_count=used_count+1 WHERE code=%s", (coupon_code,))
+        conn.commit()
+        try:
+            _audit(actor, "reconcile_assign", telegram_id, {"tx_id": tx_id, "order_id": order_id, "note": note, "ip": ip})
+        except Exception:
+            pass
+        return True, ""
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False, f"{type(e).__name__}: {e}"
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def reconcile_retry_tx(tx_id: str, actor: str, note: str, ip: str) -> tuple[bool, str]:
+    tx_id = (tx_id or "").strip()
+    if not tx_id:
+        return False, "tx_id required"
+    row = _q_all("SELECT * FROM usdt_txs WHERE tx_id=%s LIMIT 1", (tx_id,))
+    if not row:
+        return False, "tx not found"
+    tx = row[0]
+    if tx.get("telegram_id"):
+        return False, "tx already assigned"
+    if (tx.get("status") or "") not in ("seen", "unmatched"):
+        return False, "tx status not eligible"
+    addr = str(tx.get("addr") or "")
+    try:
+        amount = Decimal(str(tx.get("amount") or "0"))
+    except Exception:
+        return False, "bad amount"
+    eps = Decimal(str(AMOUNT_EPS))
+    from core.models import match_pending_order_by_amount_v2
+    from config import MATCH_ORDER_LOOKBACK_HOURS, MATCH_ORDER_PREFER_RECENT
+    tx_time = tx.get("block_time") or tx.get("created_at") or None
+    order = match_pending_order_by_amount_v2(
+        addr=addr,
+        amount=amount,
+        eps=eps,
+        tx_time=tx_time,
+        lookback_hours=int(MATCH_ORDER_LOOKBACK_HOURS),
+        prefer_recent=bool(MATCH_ORDER_PREFER_RECENT),
+    )
+    if not order:
+        try:
+            _audit(actor, "reconcile_retry_tx_no_match", None, {"tx_id": tx_id, "note": note, "ip": ip})
+        except Exception:
+            pass
+        return False, "no pending order match"
+    return reconcile_assign(tx_id=tx_id, order_id=int(order.get("id") or 0), actor=actor, note=note or "retry_tx", ip=ip)
 
 
 def list_admin_audit(hours: int, limit: int) -> list[dict]:
