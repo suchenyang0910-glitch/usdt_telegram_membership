@@ -17,6 +17,7 @@ from config import (
     FREE_CHANNEL_IDS,
     HIGHLIGHT_CHANNEL_ID,
     PAID_CHANNEL_ID,
+    HEARTBEAT_USERBOT_FILE,
     USERBOT_API_HASH,
     USERBOT_API_ID,
     USERBOT_CLIP_RANDOM,
@@ -25,7 +26,6 @@ from config import (
     USERBOT_NOTIFY_CHAT_ID,
     USERBOT_SESSION_NAME,
     USERBOT_STRING_SESSION,
-    PROJECT_ROOT,
 )
 from core.models import claim_clip_dispatch, mark_clip_dispatch_sent, unclaim_clip_dispatch
 
@@ -111,13 +111,11 @@ def _state_path() -> str:
     return os.path.join("tmp", "userbot", "processed.json")
 
 
-def _heartbeat_path() -> str:
-    return os.path.join("tmp", "heartbeat_userbot.json")
-
-
 def _write_heartbeat():
     try:
-        p = os.path.join(PROJECT_ROOT, _heartbeat_path())
+        p = str(HEARTBEAT_USERBOT_FILE or "").strip()
+        if not p:
+            return
         os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
         tmp = p + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -277,19 +275,19 @@ async def main():
 
     processed = _load_state()
 
+    async def _hb_loop():
+        while True:
+            _write_heartbeat()
+            await asyncio.sleep(30)
+
+    hb_task = asyncio.create_task(_hb_loop())
+
     async with client:
         me = await client.get_me()
         await _notify(
             client,
             f"<b>userbot 已启动</b>\nuser_id=<code>{me.id}</code>\n监听频道：<code>{PAID_CHANNEL_ID}</code>",
         )
-
-        async def _hb_loop():
-            while True:
-                _write_heartbeat()
-                await asyncio.sleep(60)
-
-        asyncio.create_task(_hb_loop())
 
         @client.on(events.Album(chats=PAID_CHANNEL_ID))
         async def on_new_album(event):
@@ -316,6 +314,10 @@ async def main():
             await _process_video_message(client, msg, caption_src)
 
         await client.run_until_disconnected()
+    try:
+        hb_task.cancel()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

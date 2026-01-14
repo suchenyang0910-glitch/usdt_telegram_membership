@@ -67,6 +67,40 @@ _last_heartbeat_err_ts = 0
 _last_overnight_report_local_date = None
 _last_health_alert_ts = None
 
+
+def _deposit_health_snapshot() -> dict:
+    conn = None
+    try:
+        from core.db import get_conn
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT MAX(processed_at) FROM usdt_txs WHERE status IN ('processed','credited')")
+        row = cur.fetchone()
+        cur.execute("SELECT COUNT(*) FROM orders WHERE status='pending' AND created_at >= (UTC_TIMESTAMP() - INTERVAL 24 HOUR)")
+        pending_orders = int(cur.fetchone()[0] or 0)
+        cur.execute("SELECT COUNT(*) FROM usdt_txs WHERE status='seen' AND created_at >= (UTC_TIMESTAMP() - INTERVAL 24 HOUR)")
+        seen_txs = int(cur.fetchone()[0] or 0)
+        cur.close()
+        last_at = row[0] if row else None
+        now = datetime.utcnow()
+        stale_minutes = (now - last_at).total_seconds() / 60.0 if last_at else None
+        return {
+            "ok": True,
+            "last_at": last_at,
+            "stale_minutes": stale_minutes,
+            "pending_orders_24h": pending_orders,
+            "seen_txs_24h": seen_txs,
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    finally:
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+
 async def cleanup_downloads_job(context: ContextTypes.DEFAULT_TYPE):
     roots = [
         os.path.join(os.path.dirname(HEARTBEAT_FILE) or "tmp", "downloads"),
@@ -188,6 +222,27 @@ async def hourly_admin_report_job(context: ContextTypes.DEFAULT_TYPE):
     for addr, bal in balances:
         v = "N/A" if bal is None else str(bal)
         lines.append(f"<code>{addr}</code>  <code>{v}</code>")
+
+    if local_hour == quiet_end:
+        snap = _deposit_health_snapshot()
+        lines.append("")
+        lines.append("<b>健康统计：入账延迟</b>")
+        if not snap.get("ok"):
+            lines.append(f"DB：<code>{snap.get('error') or 'unknown'}</code>")
+        else:
+            last_at = snap.get("last_at")
+            stale_minutes = snap.get("stale_minutes")
+            pending_orders = int(snap.get("pending_orders_24h") or 0)
+            seen_txs = int(snap.get("seen_txs_24h") or 0)
+            if last_at and stale_minutes is not None:
+                lines.append(f"最后入账：<code>{last_at.strftime('%Y-%m-%d %H:%M:%S UTC')}</code>")
+                lines.append(f"延迟分钟：<code>{float(stale_minutes):.1f}</code>")
+            else:
+                lines.append("最后入账：<code>—</code>")
+                lines.append("延迟分钟：<code>—</code>")
+            lines.append(f"pending(24h)：<code>{pending_orders}</code>")
+            lines.append(f"seen_txs(24h)：<code>{seen_txs}</code>")
+            lines.append(f"告警阈值：<code>{float(HEALTH_ALERT_DEPOSIT_STALE_MINUTES):.1f}</code> 分钟")
 
     await send_admin_text(bot, "\n".join(lines), parse_mode="HTML")
 
@@ -546,39 +601,21 @@ async def health_alert_job(context: ContextTypes.DEFAULT_TYPE):
     bot = context.bot
     global _last_health_alert_ts
 
-    conn = None
-    try:
-        from core.db import get_conn
-
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT MAX(processed_at) FROM usdt_txs WHERE status IN ('processed','credited')")
-        row = cur.fetchone()
-        cur.execute("SELECT COUNT(*) FROM orders WHERE status='pending' AND created_at >= (UTC_TIMESTAMP() - INTERVAL 24 HOUR)")
-        pending_orders = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM usdt_txs WHERE status='seen' AND created_at >= (UTC_TIMESTAMP() - INTERVAL 24 HOUR)")
-        seen_txs = cur.fetchone()[0]
-        cur.close()
-    except Exception as e:
+    snap = _deposit_health_snapshot()
+    if not snap.get("ok"):
         try:
-            await send_admin_text(bot, f"<b>健康告警：DB 异常</b>\nerr=<code>{type(e).__name__}: {e}</code>", parse_mode="HTML")
+            await send_admin_text(bot, f"<b>健康告警：DB 异常</b>\nerr=<code>{snap.get('error') or 'unknown'}</code>", parse_mode="HTML")
         except Exception:
             pass
         return
-    finally:
-        try:
-            if conn:
-                conn.close()
-        except Exception:
-            pass
 
-    last_at = row[0] if row else None
+    last_at = snap.get("last_at")
     if not last_at:
         return
-    if int(pending_orders or 0) == 0 and int(seen_txs or 0) == 0:
+    if int(snap.get("pending_orders_24h") or 0) == 0 and int(snap.get("seen_txs_24h") or 0) == 0:
         return
     now = datetime.utcnow()
-    stale_minutes = (now - last_at).total_seconds() / 60.0
+    stale_minutes = float(snap.get("stale_minutes") or 0.0)
     if stale_minutes < float(HEALTH_ALERT_DEPOSIT_STALE_MINUTES):
         return
 
