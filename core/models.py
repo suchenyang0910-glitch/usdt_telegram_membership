@@ -256,6 +256,8 @@ def init_tables():
             "button_text": "button_text VARCHAR(64) NULL",
             "button_url": "button_url VARCHAR(512) NULL",
             "disable_preview": "disable_preview TINYINT DEFAULT 0",
+            "media_type": "media_type VARCHAR(16) NULL",
+            "media": "media VARCHAR(512) NULL",
         },
     )
 

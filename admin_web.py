@@ -138,7 +138,11 @@ INDEX_HTML = """<!doctype html>
         <input id="couponPlans" placeholder="plan_codes(可选,逗号)" style="min-width:240px" />
         <input id="couponMax" placeholder="max_uses(可选)" style="min-width:140px" />
         <input id="couponExpH" placeholder="expire_hours(可选)" style="min-width:160px" />
+        <input id="couponBatchN" placeholder="批量数量(可选)" style="min-width:140px" />
+        <input id="couponPrefix" placeholder="prefix(可选)" style="min-width:140px" />
         <button onclick="createCoupon()">创建/更新</button>
+        <button onclick="generateCoupons()">批量生成</button>
+        <button onclick="exportCoupons()">导出</button>
         <button onclick="loadCoupons()">刷新</button>
       </div>
       <div id="coupons"></div>
@@ -154,7 +158,11 @@ INDEX_HTML = """<!doctype html>
         <input id="acMax" placeholder="max_uses" style="min-width:140px" />
         <input id="acExpH" placeholder="expire_hours(可选)" style="min-width:160px" />
         <input id="acNote" placeholder="note(可选)" style="min-width:240px" />
+        <input id="acBatchN" placeholder="批量数量(可选)" style="min-width:140px" />
+        <input id="acPrefix" placeholder="prefix(可选)" style="min-width:140px" />
         <button onclick="createAccessCode()">创建/更新</button>
+        <button onclick="generateAccessCodes()">批量生成</button>
+        <button onclick="exportAccessCodes()">导出</button>
         <button onclick="loadAccessCodes()">刷新</button>
       </div>
       <div id="accessCodes"></div>
@@ -168,6 +176,8 @@ INDEX_HTML = """<!doctype html>
         <input id="bcSegment" placeholder="segment" style="min-width:180px" />
         <input id="bcSource" placeholder="source(可选)" style="min-width:220px" />
         <input id="bcParseMode" placeholder="parse_mode(可选: HTML)" style="min-width:180px" />
+        <input id="bcMediaType" placeholder="media_type(可选: photo/video)" style="min-width:220px" />
+        <input id="bcMedia" placeholder="media(url 或 file_id，可选)" style="min-width:320px" />
         <input id="bcBtnText" placeholder="button_text(可选)" style="min-width:200px" />
         <input id="bcBtnUrl" placeholder="button_url(可选)" style="min-width:320px" />
         <label class="muted"><input id="bcNoPreview" type="checkbox" /> 不显示预览</label>
@@ -316,6 +326,25 @@ async function createCoupon(){
   await loadCoupons();
 }
 
+async function generateCoupons(){
+  const body = {
+    kind: document.getElementById("couponKind").value.trim(),
+    value: document.getElementById("couponValue").value.trim(),
+    plan_codes: document.getElementById("couponPlans").value.trim(),
+    max_uses: document.getElementById("couponMax").value.trim(),
+    expire_hours: document.getElementById("couponExpH").value.trim(),
+    count: parseInt(document.getElementById("couponBatchN").value.trim()||"0",10),
+    prefix: document.getElementById("couponPrefix").value.trim(),
+  };
+  const r = await jpost("/api/coupons_generate", body);
+  document.getElementById("opResult").innerText = "已生成优惠码：" + (r.created||0);
+  await loadCoupons();
+}
+
+function exportCoupons(){
+  window.location = "/api/export/coupons.csv?limit=20000";
+}
+
 async function loadAccessCodes(){
   const data = await jget("/api/access_codes?limit=50");
   document.getElementById("accessCodes").innerHTML = tableHtml(data.items||[]);
@@ -331,6 +360,24 @@ async function createAccessCode(){
   };
   await jpost("/api/access_codes_create", body);
   await loadAccessCodes();
+}
+
+async function generateAccessCodes(){
+  const body = {
+    days: parseInt(document.getElementById("acDays").value.trim(),10),
+    max_uses: parseInt(document.getElementById("acMax").value.trim()||"1",10),
+    expire_hours: document.getElementById("acExpH").value.trim(),
+    note: document.getElementById("acNote").value.trim(),
+    count: parseInt(document.getElementById("acBatchN").value.trim()||"0",10),
+    prefix: document.getElementById("acPrefix").value.trim(),
+  };
+  const r = await jpost("/api/access_codes_generate", body);
+  document.getElementById("opResult").innerText = "已生成兑换码：" + (r.created||0);
+  await loadAccessCodes();
+}
+
+function exportAccessCodes(){
+  window.location = "/api/export/access_codes.csv?limit=20000";
 }
 
 async function loadBroadcasts(){
@@ -371,6 +418,8 @@ async function createBroadcast(){
     segment: document.getElementById("bcSegment").value.trim(),
     source: document.getElementById("bcSource").value.trim(),
     parse_mode: document.getElementById("bcParseMode").value.trim(),
+    media_type: document.getElementById("bcMediaType").value.trim(),
+    media: document.getElementById("bcMedia").value.trim(),
     button_text: document.getElementById("bcBtnText").value.trim(),
     button_url: document.getElementById("bcBtnUrl").value.trim(),
     disable_preview: document.getElementById("bcNoPreview").checked ? 1 : 0,
@@ -523,6 +572,22 @@ class Handler(BaseHTTPRequestHandler):
             body = _csv_bytes(rows, cols)
             return self._send_csv("users.csv", body)
 
+        if path == "/api/export/coupons.csv":
+            qs = parse_qs(u.query)
+            limit = int((qs.get("limit", ["20000"])[0] or "20000"))
+            rows = list_coupons(limit=limit)
+            cols = ["code", "kind", "value", "plan_codes", "max_uses", "used_count", "expires_at", "active", "created_at"]
+            body = _csv_bytes(rows, cols)
+            return self._send_csv("coupons.csv", body)
+
+        if path == "/api/export/access_codes.csv":
+            qs = parse_qs(u.query)
+            limit = int((qs.get("limit", ["20000"])[0] or "20000"))
+            rows = list_access_codes(limit=limit)
+            cols = ["code", "days", "plan_code", "max_uses", "used_count", "expires_at", "note", "created_by", "created_at", "last_used_at"]
+            body = _csv_bytes(rows, cols)
+            return self._send_csv("access_codes.csv", body)
+
         if path == "/api/export/orders.csv":
             qs = parse_qs(u.query)
             hours = int((qs.get("hours", ["168"])[0] or "168"))
@@ -609,6 +674,19 @@ class Handler(BaseHTTPRequestHandler):
             body = _json_bytes({"ok": True})
             return self._send(200, body, "application/json; charset=utf-8")
 
+        if path == "/api/coupons_generate":
+            created = generate_coupons(
+                kind=(data.get("kind") or "").strip(),
+                value=(data.get("value") or "").strip(),
+                plan_codes=(data.get("plan_codes") or "").strip(),
+                max_uses=(data.get("max_uses") or ""),
+                expire_hours=(data.get("expire_hours") or ""),
+                count=int(data.get("count") or 0),
+                prefix=(data.get("prefix") or "").strip(),
+            )
+            body = _json_bytes({"ok": True, "created": created})
+            return self._send(200, body, "application/json; charset=utf-8")
+
         if path == "/api/access_codes_create":
             upsert_access_code(
                 code=(data.get("code") or "").strip(),
@@ -621,12 +699,27 @@ class Handler(BaseHTTPRequestHandler):
             body = _json_bytes({"ok": True})
             return self._send(200, body, "application/json; charset=utf-8")
 
+        if path == "/api/access_codes_generate":
+            created = generate_access_codes(
+                days=int(data.get("days") or 0),
+                max_uses=int(data.get("max_uses") or 1),
+                expire_hours=(data.get("expire_hours") or ""),
+                note=(data.get("note") or "").strip(),
+                count=int(data.get("count") or 0),
+                prefix=(data.get("prefix") or "").strip(),
+                created_by=actor,
+            )
+            body = _json_bytes({"ok": True, "created": created})
+            return self._send(200, body, "application/json; charset=utf-8")
+
         if path == "/api/broadcast_create":
             bid = create_broadcast_job_v2(
                 segment=(data.get("segment") or "").strip(),
                 source=(data.get("source") or "").strip(),
                 text=(data.get("text") or ""),
                 parse_mode=(data.get("parse_mode") or "").strip(),
+                media_type=(data.get("media_type") or "").strip(),
+                media=(data.get("media") or "").strip(),
                 button_text=(data.get("button_text") or "").strip(),
                 button_url=(data.get("button_url") or "").strip(),
                 disable_preview=int(data.get("disable_preview") or 0),
@@ -815,6 +908,53 @@ def list_coupons(limit: int) -> list[dict]:
     return _q_all(sql, (limit,))
 
 
+def generate_coupons(kind: str, value: str, plan_codes: str, max_uses, expire_hours, count: int, prefix: str) -> int:
+    kind = (kind or "").strip().lower()
+    if kind not in ("percent", "fixed"):
+        raise ValueError("kind must be percent/fixed")
+    try:
+        v = float(value)
+    except Exception:
+        raise ValueError("bad value")
+    count = int(count or 0)
+    if count <= 0 or count > 500:
+        raise ValueError("bad count")
+    prefix = (prefix or "").strip().upper()
+    if prefix and not prefix.endswith("_"):
+        prefix = prefix + "_"
+    plan_codes = (plan_codes or "").strip() or None
+    max_uses_v = None
+    if str(max_uses).strip():
+        max_uses_v = int(max_uses)
+    expires_at = None
+    if str(expire_hours).strip():
+        expires_at = _utc_now() + timedelta(hours=int(expire_hours))
+    created = 0
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        for _ in range(count * 3):
+            if created >= count:
+                break
+            code = prefix + secrets.token_hex(4).upper()
+            cur.execute(
+                """
+                INSERT IGNORE INTO coupons (code, kind, value, plan_codes, max_uses, used_count, expires_at, active)
+                VALUES (%s,%s,%s,%s,%s,0,%s,1)
+                """,
+                (code, kind, str(v), plan_codes, max_uses_v, expires_at),
+            )
+            if cur.rowcount == 1:
+                created += 1
+        conn.commit()
+        cur.close()
+        return created
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
 def upsert_coupon(code: str, kind: str, value: str, plan_codes: str, max_uses, expire_hours):
     code = (code or "").strip()
     if not code:
@@ -853,6 +993,48 @@ def list_access_codes(limit: int) -> list[dict]:
     """
     return _q_all(sql, (limit,))
 
+
+def generate_access_codes(days: int, max_uses: int, expire_hours, note: str, count: int, prefix: str, created_by: str) -> int:
+    days = int(days or 0)
+    if days == 0:
+        raise ValueError("days required")
+    max_uses = max(1, int(max_uses or 1))
+    count = int(count or 0)
+    if count <= 0 or count > 500:
+        raise ValueError("bad count")
+    prefix = (prefix or "").strip().upper()
+    if prefix and not prefix.endswith("_"):
+        prefix = prefix + "_"
+    expires_at = None
+    if str(expire_hours).strip():
+        expires_at = _utc_now() + timedelta(hours=int(expire_hours))
+    note = (note or "").strip() or None
+    created_by = (created_by or "").strip() or None
+    created = 0
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        for _ in range(count * 3):
+            if created >= count:
+                break
+            code = prefix + secrets.token_urlsafe(9).replace("-", "").replace("_", "").upper()
+            cur.execute(
+                """
+                INSERT IGNORE INTO access_codes (code, days, plan_code, max_uses, used_count, expires_at, note, created_by)
+                VALUES (%s,%s,NULL,%s,0,%s,%s,%s)
+                """,
+                (code, days, max_uses, expires_at, (note or "")[:256] if note else None, created_by),
+            )
+            if cur.rowcount == 1:
+                created += 1
+        conn.commit()
+        cur.close()
+        return created
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 def upsert_access_code(code: str, days: int, max_uses: int, expire_hours, note: str, created_by: str):
     code = (code or "").strip()
@@ -911,6 +1093,8 @@ def create_broadcast_job_v2(
     source: str,
     text: str,
     parse_mode: str,
+    media_type: str,
+    media: str,
     button_text: str,
     button_url: str,
     disable_preview: int,
@@ -924,6 +1108,14 @@ def create_broadcast_job_v2(
     parse_mode = (parse_mode or "").strip() or None
     if parse_mode and parse_mode not in ("HTML", "Markdown", "MarkdownV2"):
         raise ValueError("bad parse_mode")
+    media_type = (media_type or "").strip().lower() or None
+    media = (media or "").strip() or None
+    if media_type and media_type not in ("photo", "video"):
+        raise ValueError("bad media_type")
+    if media_type and not media:
+        raise ValueError("media required")
+    if media and not media_type:
+        raise ValueError("media_type required")
     button_text = (button_text or "").strip() or None
     button_url = (button_url or "").strip() or None
     if button_text and not button_url:
@@ -936,10 +1128,10 @@ def create_broadcast_job_v2(
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO broadcast_jobs (segment, source, text, parse_mode, button_text, button_url, disable_preview, status, created_by)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,'created',%s)
+            INSERT INTO broadcast_jobs (segment, source, text, parse_mode, media_type, media, button_text, button_url, disable_preview, status, created_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'created',%s)
             """,
-            (segment, source, text, parse_mode, button_text, button_url, disable_preview, created_by),
+            (segment, source, text, parse_mode, media_type, media, button_text, button_url, disable_preview, created_by),
         )
         bid = int(cur.lastrowid)
         conn.commit()
@@ -955,7 +1147,7 @@ def create_broadcast_job_v2(
 def list_broadcast_jobs(limit: int) -> list[dict]:
     limit = max(1, min(int(limit), 200))
     sql = """
-        SELECT id, segment, source, status, created_by, created_at, started_at, finished_at, total, success, failed
+        SELECT id, segment, source, status, media_type, media, parse_mode, button_url, created_by, created_at, started_at, finished_at, total, success, failed
         FROM broadcast_jobs
         ORDER BY created_at DESC
         LIMIT %s
@@ -1051,6 +1243,8 @@ def _run_broadcast(job_id: int):
     source = job.get("source")
     text = job.get("text") or ""
     parse_mode = (job.get("parse_mode") or "").strip() or None
+    media_type = (job.get("media_type") or "").strip().lower() or None
+    media = (job.get("media") or "").strip() or None
     button_text = (job.get("button_text") or "").strip() or None
     button_url = (job.get("button_url") or "").strip() or None
     disable_preview = int(job.get("disable_preview") or 0) == 1
@@ -1071,24 +1265,35 @@ def _run_broadcast(job_id: int):
         if srow in ("paused", "aborted", "done"):
             _broadcast_update(job_id, status=str(srow))
             return
-        payload = {"chat_id": str(uid), "text": text}
-        if parse_mode:
-            payload["parse_mode"] = parse_mode
-        if disable_preview:
-            payload["disable_web_page_preview"] = "true"
+        payload = {"chat_id": str(uid)}
+        method = "sendMessage"
+        if media_type and media:
+            if media_type == "photo":
+                method = "sendPhoto"
+                payload["photo"] = media
+            elif media_type == "video":
+                method = "sendVideo"
+                payload["video"] = media
+                payload["supports_streaming"] = "true"
+            payload["caption"] = text
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
+        else:
+            payload["text"] = text
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
+            if disable_preview:
+                payload["disable_web_page_preview"] = "true"
         if button_url:
             bt = button_text or "打开"
-            payload["reply_markup"] = json.dumps(
-                {"inline_keyboard": [[{"text": bt, "url": button_url}]]},
-                ensure_ascii=False,
-            )
-        ok, res = _bot_api("sendMessage", payload)
+            payload["reply_markup"] = json.dumps({"inline_keyboard": [[{"text": bt, "url": button_url}]]}, ensure_ascii=False)
+        ok, res = _bot_api(method, payload)
         if not ok and isinstance(res, dict) and res.get("retry_after"):
             try:
                 time.sleep(float(res.get("retry_after") or 1))
             except Exception:
                 time.sleep(1.0)
-            ok, res = _bot_api("sendMessage", payload)
+            ok, res = _bot_api(method, payload)
         if ok:
             ok_n += 1
             _broadcast_log(job_id, uid, "sent", None)
