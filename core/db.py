@@ -1,7 +1,7 @@
 # core/db.py
 import mysql.connector
 from mysql.connector import pooling
-from mysql.connector.errors import OperationalError, InterfaceError
+from mysql.connector.errors import OperationalError, InterfaceError, DatabaseError
 from config import DB_HOST, DB_PORT, DB_USER, DB_PASS, DB_NAME
 
 _pool: pooling.MySQLConnectionPool | None = None
@@ -36,7 +36,7 @@ def get_conn():
             except Exception:
                 conn.ping(reconnect=True, attempts=3, delay=1)
             return conn
-        except (OperationalError, InterfaceError) as e:
+        except (OperationalError, InterfaceError, DatabaseError) as e:
             last_err = e
             _pool = None
             continue
