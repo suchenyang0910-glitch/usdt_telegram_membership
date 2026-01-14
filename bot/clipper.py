@@ -13,6 +13,7 @@ from config import (
     DOWNLOAD_DIR,
     CLIP_DIR,
     CLIP_SECONDS,
+    CLIP_START_OFFSET_SEC,
     CLIP_RANDOM,
     SEND_RETRY,
     FREE_CHANNEL_IDS,
@@ -119,12 +120,22 @@ async def private_channel_video_handler(update: Update, context: ContextTypes.DE
         return
 
     duration = video.duration or 0
+    start_offset = int(CLIP_START_OFFSET_SEC or 0)
     clip_len = min(CLIP_SECONDS, duration) if duration else CLIP_SECONDS
 
-    if duration <= clip_len or not CLIP_RANDOM:
-        start = 0
+    if start_offset > 0:
+        if duration and duration > 0:
+            max_start = max(0, int(duration - clip_len))
+            start = min(start_offset, max_start)
+            remain = max(1, int(duration - start))
+            clip_len = min(int(clip_len), remain)
+        else:
+            start = 0
     else:
-        start = random.randint(0, max(0, duration - clip_len))
+        if duration <= clip_len or not CLIP_RANDOM:
+            start = 0
+        else:
+            start = random.randint(0, max(0, duration - clip_len))
 
     # 先尝试无损剪辑，不行再转码
     cmd = [

@@ -13,5 +13,5 @@ Get-Content $envFile -Encoding UTF8 | ForEach-Object {
   [Environment]::SetEnvironmentVariable($key, $v.Trim(), 'Process')
 }
 
-python (Join-Path $PSScriptRoot "local_userbot_single.py")
+python (Join-Path $PSScriptRoot "local_list_chats.py")
 

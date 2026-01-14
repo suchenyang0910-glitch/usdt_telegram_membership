@@ -273,6 +273,7 @@ AMOUNT_EPS = Decimal("0.000001")  # 金额容差
 DOWNLOAD_DIR = _abs_path(str(_cfg_value("DOWNLOAD_DIR", "tmp/downloads") or "tmp/downloads"))
 CLIP_DIR     = _abs_path(str(_cfg_value("CLIP_DIR", "tmp/clips") or "tmp/clips"))
 CLIP_SECONDS = _to_int(_cfg_value("CLIP_SECONDS", "30"), 30)
+CLIP_START_OFFSET_SEC = _to_int(_cfg_value("CLIP_START_OFFSET_SEC", "60"), 60)
 CLIP_RANDOM  = _to_bool(_cfg_value("CLIP_RANDOM", "1"), True)
 SEND_RETRY   = 3
 MAX_TG_DOWNLOAD_MB = _to_int(_cfg_value("MAX_TG_DOWNLOAD_MB", "19"), 19)
