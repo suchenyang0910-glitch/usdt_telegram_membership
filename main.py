@@ -11,6 +11,8 @@ from bot.handlers import (
     start,
     plans,
     invite,
+    coupon,
+    redeem,
     on_menu_button,
     reset_addr,
     my_id,
@@ -47,6 +49,8 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("plans", plans))
     app.add_handler(CommandHandler("invite", invite))
+    app.add_handler(CommandHandler("coupon", coupon))
+    app.add_handler(CommandHandler("redeem", redeem))
     app.add_handler(CommandHandler("reset_addr", reset_addr))
     app.add_handler(CommandHandler("diag", diag))
     app.add_handler(CommandHandler("chatid", chat_id))

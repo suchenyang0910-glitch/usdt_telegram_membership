@@ -1,5 +1,5 @@
 # bot/handlers.py
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 import random
 
@@ -23,15 +23,23 @@ from config import (
     PAYMENT_SUFFIX_ENABLE,
     PAYMENT_SUFFIX_MIN,
     PAYMENT_SUFFIX_MAX,
+    JOIN_REQUEST_ENABLE,
+    JOIN_REQUEST_LINK_EXPIRE_HOURS,
 )
 from core.models import (
     get_user,
     upsert_user_basic,
     allocate_address,
     create_pending_order,
+    create_pending_order_priced,
+    compute_amount_after_coupon,
+    coupon_basic_valid,
     reset_user_address,
+    set_user_pending_coupon,
+    set_user_source,
     support_store_mapping,
     support_get_user_id,
+    redeem_access_code,
 )
 from core.utils import b58decode, b58encode
 from bot.i18n import t, normalize_lang
@@ -122,14 +130,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 解析邀请参数 /start ref_xxx
     logger.info("handers.py--->解析邀请参数 /start ref_xxx")
     args = context.args or []
-    if args and args[0].startswith("ref_"):
-        code = args[0][4:]
-        try:
-            inviter_id = b58decode(code)
-            if inviter_id != telegram_id:
-                bind_inviter(telegram_id, inviter_id)
-        except Exception:
-            pass
+    for a in args[:5]:
+        if a.startswith("ref_"):
+            code = a[4:]
+            try:
+                inviter_id = b58decode(code)
+                if inviter_id != telegram_id:
+                    bind_inviter(telegram_id, inviter_id)
+            except Exception:
+                pass
+            try:
+                set_user_source(telegram_id, "ref")
+            except Exception:
+                pass
+            continue
+        if a.startswith("cp_"):
+            try:
+                set_user_pending_coupon(telegram_id, a[3:])
+            except Exception:
+                pass
+            continue
+        if a:
+            try:
+                set_user_source(telegram_id, a)
+            except Exception:
+                pass
 
     # 更新基础信息
     logger.info("handers.py--->更新基础信息")
@@ -463,12 +488,14 @@ async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("pay_") and telegram_id:
         u = get_user(telegram_id)
-        plan_map = {
-            "pay_monthly": ("monthly", Decimal("9.99")),
-            "pay_quarter": ("quarter", Decimal("19.99")),
-            "pay_yearly": ("yearly", Decimal("79.99")),
+        plan_code_map = {
+            "pay_monthly": "monthly",
+            "pay_quarter": "quarter",
+            "pay_yearly": "yearly",
         }
-        plan_code, base_amount = plan_map.get(data, ("monthly", Decimal("9.99")))
+        plan_code = plan_code_map.get(data, "monthly")
+        plan = next((p for p in PLANS if p.get("code") == plan_code), None)
+        base_amount = Decimal(str((plan or {}).get("price") or "0"))
 
         if PAYMENT_MODE == "single_address" and RECEIVE_ADDRESS:
             addr = RECEIVE_ADDRESS
@@ -480,9 +507,18 @@ async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     addr = None
 
-        amount = _pick_payment_amount(base_amount)
+        coupon_code = ((u or {}).get("pending_coupon") or "").strip() or None
+        discounted, _disc, applied = compute_amount_after_coupon(base_amount, plan_code, coupon_code)
+        amount = _pick_payment_amount(discounted)
         if addr:
-            create_pending_order(telegram_id, addr, amount, plan_code)
+            if applied:
+                create_pending_order_priced(telegram_id, addr, amount, base_amount, plan_code, applied)
+                try:
+                    set_user_pending_coupon(telegram_id, None)
+                except Exception:
+                    pass
+            else:
+                create_pending_order(telegram_id, addr, amount, plan_code)
 
         if lang == "zh":
             msg = (
@@ -530,3 +566,69 @@ async def invite(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_photo(photo=poster_buf)
     except Exception:
         return
+
+
+async def coupon(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    msg = update.message
+    if not user or not msg:
+        return
+    telegram_id = int(user.id)
+    args = context.args or []
+    code = (args[0] if args else "") or ""
+    code = code.strip()
+    if not code:
+        await msg.reply_text("用法：/coupon 优惠码")
+        return
+    if not coupon_basic_valid(code):
+        await msg.reply_text("优惠码无效或已过期。")
+        return
+    try:
+        set_user_pending_coupon(telegram_id, code)
+    except Exception:
+        await msg.reply_text("设置失败，请稍后重试。")
+        return
+    await msg.reply_text("✅ 优惠码已应用。请选择套餐下单。")
+
+
+async def redeem(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    msg = update.message
+    if not user or not msg:
+        return
+    telegram_id = int(user.id)
+    args = context.args or []
+    code = (args[0] if args else "") or ""
+    code = code.strip()
+    if not code:
+        await msg.reply_text("用法：/redeem 兑换码")
+        return
+    ok, err, paid_until, days = redeem_access_code(code, telegram_id)
+    if not ok:
+        await msg.reply_text("兑换失败：" + (err or "未知错误"))
+        return
+    try:
+        if JOIN_REQUEST_ENABLE:
+            expire_ts = int((datetime.utcnow() + timedelta(hours=int(JOIN_REQUEST_LINK_EXPIRE_HOURS))).timestamp())
+            invite_link = await context.bot.create_chat_invite_link(
+                chat_id=PAID_CHANNEL_ID,
+                expire_date=expire_ts,
+                creates_join_request=True,
+            )
+        else:
+            expire_ts = int(paid_until.timestamp()) if paid_until else int((datetime.utcnow() + timedelta(hours=24)).timestamp())
+            invite_link = await context.bot.create_chat_invite_link(
+                chat_id=PAID_CHANNEL_ID,
+                expire_date=expire_ts,
+                member_limit=1,
+            )
+        until_str = paid_until.strftime("%Y-%m-%d %H:%M:%S UTC") if paid_until else ""
+        text = (
+            f"✅ 兑换成功：已增加 {days} 天会员\n"
+            f"有效期至：{until_str}\n\n"
+            f"点击链接加入/重新加入：\n{invite_link.invite_link}"
+        )
+        await msg.reply_text(text)
+    except Exception:
+        until_str = paid_until.strftime("%Y-%m-%d %H:%M:%S UTC") if paid_until else ""
+        await msg.reply_text(f"✅ 兑换成功：已增加 {days} 天会员\n有效期至：{until_str}\n\n入群链接发送失败，请稍后重试。")

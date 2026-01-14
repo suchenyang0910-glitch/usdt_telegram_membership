@@ -138,6 +138,11 @@ ADMIN_WEB_USER = os.getenv("ADMIN_WEB_USER", "").strip()
 ADMIN_WEB_PASS = os.getenv("ADMIN_WEB_PASS", "").strip()
 ADMIN_WEB_ACTIONS_ENABLE = os.getenv("ADMIN_WEB_ACTIONS_ENABLE", "1") == "1"
 
+# 广播（admin_web）
+BROADCAST_SLEEP_SEC = float(os.getenv("BROADCAST_SLEEP_SEC", "0.15"))
+BROADCAST_ABORT_MIN_SENT = int(os.getenv("BROADCAST_ABORT_MIN_SENT", "50"))
+BROADCAST_ABORT_FAIL_RATE = float(os.getenv("BROADCAST_ABORT_FAIL_RATE", "0.7"))
+
 # 邀请奖励（按套餐 code 区分）
 INVITE_REWARD = {
     "monthly":  3,   # 邀月卡 → 奖励 3 天

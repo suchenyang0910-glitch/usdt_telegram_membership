@@ -5,7 +5,7 @@ def highlight_caption() -> str:
     return (
         "🎬 试看 30 秒高能片段\n\n"
         "想看完整版？点击进入 Bot 开通会员：\n"
-        f"`https://t.me/{BOT_USERNAME}?start=from_highlight`"
+        f"https://t.me/{BOT_USERNAME}?start=from_highlight"
     )
 
 

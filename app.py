@@ -1,4 +1,5 @@
 import logging
+import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -10,8 +11,8 @@ from telegram.ext import (
 )
 
 # ===== 基本配置 =====
-BOT_TOKEN = "8547638320:AAEIAL8GMhsoJ43vc0Z8jJxT1qTE4u72yUs"
-PAID_CHANNEL_INVITE_LINK = "https://t.me/+2NCjX3zEUQsxYzE9"  # 固定邀请链接（后续可换成动态）
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+PAID_CHANNEL_INVITE_LINK = os.getenv("PAID_CHANNEL_INVITE_LINK", "")
 
 DB_PATH = "pv_bot.db"
 
@@ -123,9 +124,9 @@ def start(update: Update, context: CallbackContext):
         "• 持续更新，历史内容长期保留，随时回看\n"
         "• 仅限会员访问，不会在公开频道出现\n\n"
         "你目前还没有开通会员，可以随时充值开通：\n"
-        "• 年度会员：79.99 USDT / 365 天\n"
-        "• 季度会员：19.99 USDT / 90 天\n"
-        "• 月度会员：9.99 USDT / 30 天\n\n"
+        "• 年度会员：15.99 USDT / 365 天\n"
+        "• 季度会员：3.99 USDT / 90 天\n"
+        "• 月度会员：1.99 USDT / 30 天\n\n"
         "请使用 *USDT-TRC20* 向以下地址转账：\n"
         "`TWAVjpfcdH68wQPFFnzrDPdZPAHhr7RAr2`\n\n"
         "转账完成后，你可以发送 TxID 给我，我会自动为你开通或续费频道访问权限，无需联系客服。\n\n"

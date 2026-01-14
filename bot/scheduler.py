@@ -392,6 +392,12 @@ async def check_expired_job(context: ContextTypes.DEFAULT_TYPE):
     for u in expired_users:
         telegram_id = u["telegram_id"]
         lang = normalize_lang(u.get("language") or "en")
+        if int(u.get("is_whitelisted") or 0) == 1:
+            try:
+                mark_user_expired_handled(telegram_id, now)
+            except Exception:
+                pass
+            continue
         try:
             await bot.ban_chat_member(chat_id=PAID_CHANNEL_ID, user_id=telegram_id)
             await bot.unban_chat_member(chat_id=PAID_CHANNEL_ID, user_id=telegram_id)
@@ -441,6 +447,10 @@ async def health_alert_job(context: ContextTypes.DEFAULT_TYPE):
         cur = conn.cursor()
         cur.execute("SELECT MAX(processed_at) FROM usdt_txs WHERE status IN ('processed','credited')")
         row = cur.fetchone()
+        cur.execute("SELECT COUNT(*) FROM orders WHERE status='pending' AND created_at >= (UTC_TIMESTAMP() - INTERVAL 24 HOUR)")
+        pending_orders = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM usdt_txs WHERE status='seen' AND created_at >= (UTC_TIMESTAMP() - INTERVAL 24 HOUR)")
+        seen_txs = cur.fetchone()[0]
         cur.close()
     except Exception as e:
         try:
@@ -457,6 +467,8 @@ async def health_alert_job(context: ContextTypes.DEFAULT_TYPE):
 
     last_at = row[0] if row else None
     if not last_at:
+        return
+    if int(pending_orders or 0) == 0 and int(seen_txs or 0) == 0:
         return
     now = datetime.utcnow()
     stale_minutes = (now - last_at).total_seconds() / 60.0

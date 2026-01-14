@@ -3,6 +3,8 @@ import json
 import os
 import secrets
 import socket
+import threading
+import time
 from datetime import datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +20,11 @@ from config import (
     ADMIN_WEB_PORT,
     ADMIN_WEB_USER,
     BOT_TOKEN,
+    BROADCAST_ABORT_FAIL_RATE,
+    BROADCAST_ABORT_MIN_SENT,
+    BROADCAST_SLEEP_SEC,
+    JOIN_REQUEST_ENABLE,
+    JOIN_REQUEST_LINK_EXPIRE_HOURS,
     PAID_CHANNEL_ID,
 )
 from core.db import get_conn
@@ -71,8 +78,9 @@ INDEX_HTML = """<!doctype html>
     .card{border:1px solid #ddd;border-radius:10px;padding:12px}
     .k{color:#666;font-size:12px}
     .v{font-size:22px;font-weight:700;margin-top:6px}
-    input,button{padding:10px;border-radius:10px;border:1px solid #ccc}
+    input,button,textarea{padding:10px;border-radius:10px;border:1px solid #ccc}
     button{cursor:pointer;background:#111;color:#fff;border-color:#111}
+    textarea{min-width:520px;min-height:90px}
     table{width:100%;border-collapse:collapse;margin-top:10px}
     th,td{border-bottom:1px solid #eee;padding:8px;text-align:left;font-size:13px;vertical-align:top}
     .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
@@ -102,9 +110,70 @@ INDEX_HTML = """<!doctype html>
     <input id="note" placeholder="操作备注（可选）" style="min-width:320px" />
     <button onclick="extendUser()">执行续费/扣减</button>
     <button onclick="resendInvite()">重发入群链接</button>
+    <button onclick="toggleBlacklist()">拉黑/取消拉黑</button>
+    <button onclick="toggleWhitelist()">白名单/取消白名单</button>
   </div>
   <div class="muted" id="opResult" style="margin-top:8px"></div>
   <div id="detail"></div>
+
+  <h3>运营工具</h3>
+  <div class="row">
+    <div>
+      <div class="muted">优惠码（kind=percent 或 fixed）</div>
+      <div class="row">
+        <input id="couponCode" placeholder="code" style="min-width:160px" />
+        <input id="couponKind" placeholder="kind" style="min-width:120px" />
+        <input id="couponValue" placeholder="value" style="min-width:120px" />
+        <input id="couponPlans" placeholder="plan_codes(可选,逗号)" style="min-width:240px" />
+        <input id="couponMax" placeholder="max_uses(可选)" style="min-width:140px" />
+        <input id="couponExpH" placeholder="expire_hours(可选)" style="min-width:160px" />
+        <button onclick="createCoupon()">创建/更新</button>
+        <button onclick="loadCoupons()">刷新</button>
+      </div>
+      <div id="coupons"></div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:16px">
+    <div>
+      <div class="muted">兑换码（/redeem 使用）</div>
+      <div class="row">
+        <input id="acCode" placeholder="code" style="min-width:200px" />
+        <input id="acDays" placeholder="days" style="min-width:120px" />
+        <input id="acMax" placeholder="max_uses" style="min-width:140px" />
+        <input id="acExpH" placeholder="expire_hours(可选)" style="min-width:160px" />
+        <input id="acNote" placeholder="note(可选)" style="min-width:240px" />
+        <button onclick="createAccessCode()">创建/更新</button>
+        <button onclick="loadAccessCodes()">刷新</button>
+      </div>
+      <div id="accessCodes"></div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:16px">
+    <div>
+      <div class="muted">广播（segment=all/active/expired/expiring1d/expiring3d/non_member，可选 source）</div>
+      <div class="row">
+        <input id="bcSegment" placeholder="segment" style="min-width:180px" />
+        <input id="bcSource" placeholder="source(可选)" style="min-width:220px" />
+        <input id="bcParseMode" placeholder="parse_mode(可选: HTML)" style="min-width:180px" />
+        <input id="bcBtnText" placeholder="button_text(可选)" style="min-width:200px" />
+        <input id="bcBtnUrl" placeholder="button_url(可选)" style="min-width:320px" />
+        <label class="muted"><input id="bcNoPreview" type="checkbox" /> 不显示预览</label>
+        <button onclick="createBroadcast()">创建</button>
+        <button onclick="loadBroadcasts()">刷新</button>
+      </div>
+      <div class="row">
+        <textarea id="bcText" placeholder="广播内容（纯文本）"></textarea>
+      </div>
+      <div class="row">
+        <input id="bcJobId" placeholder="job_id 查看发送日志" style="min-width:200px" />
+        <button onclick="loadBroadcastLogs()">查看日志</button>
+      </div>
+      <div id="broadcastLogs"></div>
+      <div id="broadcasts"></div>
+    </div>
+  </div>
 
   <h3>最近订单</h3>
   <div class="row">
@@ -189,6 +258,86 @@ async function resendInvite(){
   document.getElementById("opResult").innerText = "已发送入群链接。";
 }
 
+async function toggleBlacklist(){
+  const uid = document.getElementById("uid").value.trim();
+  const note = document.getElementById("note").value.trim();
+  if(!uid){ return; }
+  const r = await jpost("/api/user_flags", {telegram_id: uid, toggle: "black", note});
+  document.getElementById("opResult").innerText = "已更新：blacklisted=" + (r.is_blacklisted ? "1":"0");
+  await loadUserDetail();
+}
+
+async function toggleWhitelist(){
+  const uid = document.getElementById("uid").value.trim();
+  const note = document.getElementById("note").value.trim();
+  if(!uid){ return; }
+  const r = await jpost("/api/user_flags", {telegram_id: uid, toggle: "white", note});
+  document.getElementById("opResult").innerText = "已更新：whitelisted=" + (r.is_whitelisted ? "1":"0");
+  await loadUserDetail();
+}
+
+async function loadCoupons(){
+  const data = await jget("/api/coupons?limit=50");
+  document.getElementById("coupons").innerHTML = tableHtml(data.items||[]);
+}
+
+async function createCoupon(){
+  const body = {
+    code: document.getElementById("couponCode").value.trim(),
+    kind: document.getElementById("couponKind").value.trim(),
+    value: document.getElementById("couponValue").value.trim(),
+    plan_codes: document.getElementById("couponPlans").value.trim(),
+    max_uses: document.getElementById("couponMax").value.trim(),
+    expire_hours: document.getElementById("couponExpH").value.trim(),
+  };
+  await jpost("/api/coupons_create", body);
+  await loadCoupons();
+}
+
+async function loadAccessCodes(){
+  const data = await jget("/api/access_codes?limit=50");
+  document.getElementById("accessCodes").innerHTML = tableHtml(data.items||[]);
+}
+
+async function createAccessCode(){
+  const body = {
+    code: document.getElementById("acCode").value.trim(),
+    days: parseInt(document.getElementById("acDays").value.trim(),10),
+    max_uses: parseInt(document.getElementById("acMax").value.trim()||"1",10),
+    expire_hours: document.getElementById("acExpH").value.trim(),
+    note: document.getElementById("acNote").value.trim(),
+  };
+  await jpost("/api/access_codes_create", body);
+  await loadAccessCodes();
+}
+
+async function loadBroadcasts(){
+  const data = await jget("/api/broadcast_jobs?limit=30");
+  document.getElementById("broadcasts").innerHTML = tableHtml(data.items||[]);
+}
+
+async function loadBroadcastLogs(){
+  const id = document.getElementById("bcJobId").value.trim();
+  if(!id){ return; }
+  const data = await jget("/api/broadcast_logs?job_id=" + encodeURIComponent(id) + "&limit=200");
+  document.getElementById("broadcastLogs").innerHTML = tableHtml(data.items||[]);
+}
+
+async function createBroadcast(){
+  const body = {
+    segment: document.getElementById("bcSegment").value.trim(),
+    source: document.getElementById("bcSource").value.trim(),
+    parse_mode: document.getElementById("bcParseMode").value.trim(),
+    button_text: document.getElementById("bcBtnText").value.trim(),
+    button_url: document.getElementById("bcBtnUrl").value.trim(),
+    disable_preview: document.getElementById("bcNoPreview").checked ? 1 : 0,
+    text: document.getElementById("bcText").value,
+  };
+  const r = await jpost("/api/broadcast_create", body);
+  await loadBroadcasts();
+  if(r && r.id){ await jpost("/api/broadcast_run", {id: r.id}); await loadBroadcasts(); }
+}
+
 async function loadOrders(){
   const data = await jget("/api/orders?hours=24&limit=50");
   document.getElementById("ordersHint").innerText = "时间范围: 最近 24 小时";
@@ -197,6 +346,9 @@ async function loadOrders(){
 
 loadStats();
 loadOrders();
+loadCoupons();
+loadAccessCodes();
+loadBroadcasts();
 </script>
 </body>
 </html>
@@ -263,6 +415,31 @@ class Handler(BaseHTTPRequestHandler):
             body = _json_bytes({"items": list_orders(hours=hours, limit=limit)})
             return self._send(200, body, "application/json; charset=utf-8")
 
+        if path == "/api/coupons":
+            qs = parse_qs(u.query)
+            limit = int((qs.get("limit", ["50"])[0] or "50"))
+            body = _json_bytes({"items": list_coupons(limit=limit)})
+            return self._send(200, body, "application/json; charset=utf-8")
+
+        if path == "/api/access_codes":
+            qs = parse_qs(u.query)
+            limit = int((qs.get("limit", ["50"])[0] or "50"))
+            body = _json_bytes({"items": list_access_codes(limit=limit)})
+            return self._send(200, body, "application/json; charset=utf-8")
+
+        if path == "/api/broadcast_jobs":
+            qs = parse_qs(u.query)
+            limit = int((qs.get("limit", ["30"])[0] or "30"))
+            body = _json_bytes({"items": list_broadcast_jobs(limit=limit)})
+            return self._send(200, body, "application/json; charset=utf-8")
+
+        if path == "/api/broadcast_logs":
+            qs = parse_qs(u.query)
+            job_id = int((qs.get("job_id", ["0"])[0] or "0"))
+            limit = int((qs.get("limit", ["200"])[0] or "200"))
+            body = _json_bytes({"items": list_broadcast_logs(job_id=job_id, limit=limit)})
+            return self._send(200, body, "application/json; charset=utf-8")
+
         self._send(404, b"not found", "text/plain; charset=utf-8")
 
     def do_POST(self):
@@ -300,6 +477,58 @@ class Handler(BaseHTTPRequestHandler):
             code = 200 if ok else 500
             body = _json_bytes({"ok": ok, "error": err})
             return self._send(code, body, "application/json; charset=utf-8")
+
+        if path == "/api/coupons_create":
+            upsert_coupon(
+                code=(data.get("code") or "").strip(),
+                kind=(data.get("kind") or "").strip(),
+                value=(data.get("value") or "").strip(),
+                plan_codes=(data.get("plan_codes") or "").strip(),
+                max_uses=(data.get("max_uses") or ""),
+                expire_hours=(data.get("expire_hours") or ""),
+            )
+            body = _json_bytes({"ok": True})
+            return self._send(200, body, "application/json; charset=utf-8")
+
+        if path == "/api/access_codes_create":
+            upsert_access_code(
+                code=(data.get("code") or "").strip(),
+                days=int(data.get("days") or 0),
+                max_uses=int(data.get("max_uses") or 1),
+                expire_hours=(data.get("expire_hours") or ""),
+                note=(data.get("note") or "").strip(),
+                created_by=actor,
+            )
+            body = _json_bytes({"ok": True})
+            return self._send(200, body, "application/json; charset=utf-8")
+
+        if path == "/api/broadcast_create":
+            bid = create_broadcast_job_v2(
+                segment=(data.get("segment") or "").strip(),
+                source=(data.get("source") or "").strip(),
+                text=(data.get("text") or ""),
+                parse_mode=(data.get("parse_mode") or "").strip(),
+                button_text=(data.get("button_text") or "").strip(),
+                button_url=(data.get("button_url") or "").strip(),
+                disable_preview=int(data.get("disable_preview") or 0),
+                created_by=actor,
+            )
+            body = _json_bytes({"ok": True, "id": bid})
+            return self._send(200, body, "application/json; charset=utf-8")
+
+        if path == "/api/broadcast_run":
+            bid = int(data.get("id") or 0)
+            ok = run_broadcast_async(bid)
+            body = _json_bytes({"ok": ok})
+            return self._send(200, body, "application/json; charset=utf-8")
+
+        if path == "/api/user_flags":
+            telegram_id = int(str(data.get("telegram_id") or "0"))
+            toggle = (data.get("toggle") or "").strip()
+            note = (data.get("note") or "").strip()
+            res = user_toggle_flags(telegram_id, toggle=toggle, note=note, actor=actor, ip=self.client_address[0])
+            body = _json_bytes({"ok": True, **res})
+            return self._send(200, body, "application/json; charset=utf-8")
 
         self._send(404, b"not found", "text/plain; charset=utf-8")
 
@@ -366,11 +595,11 @@ def stats() -> dict:
     )
     addr_total = int(_q_one("SELECT COUNT(*) FROM address_pool") or 0)
     addr_assigned = int(_q_one("SELECT COUNT(*) FROM address_pool WHERE assigned_to IS NOT NULL") or 0)
-    orders_24h = int(_q_one("SELECT COUNT(*) FROM orders WHERE status='paid' AND created_at >= (UTC_TIMESTAMP() - INTERVAL 24 HOUR)") or 0)
-    amount_24h = _q_one("SELECT COALESCE(SUM(amount),0) FROM orders WHERE status='paid' AND created_at >= (UTC_TIMESTAMP() - INTERVAL 24 HOUR)") or 0
+    orders_24h = int(_q_one("SELECT COUNT(*) FROM orders WHERE status='success' AND created_at >= (UTC_TIMESTAMP() - INTERVAL 24 HOUR)") or 0)
+    amount_24h = _q_one("SELECT COALESCE(SUM(amount),0) FROM orders WHERE status='success' AND created_at >= (UTC_TIMESTAMP() - INTERVAL 24 HOUR)") or 0
     payers_24h = int(
         _q_one(
-            "SELECT COUNT(DISTINCT telegram_id) FROM orders WHERE status='paid' AND created_at >= (UTC_TIMESTAMP() - INTERVAL 24 HOUR)"
+            "SELECT COUNT(DISTINCT telegram_id) FROM orders WHERE status='success' AND created_at >= (UTC_TIMESTAMP() - INTERVAL 24 HOUR)"
         )
         or 0
     )
@@ -416,9 +645,310 @@ def list_orders(hours: int, limit: int) -> list[dict]:
     return _q_all(sql, (hours, limit))
 
 
+def list_coupons(limit: int) -> list[dict]:
+    limit = max(1, min(int(limit), 200))
+    sql = """
+        SELECT code, kind, value, plan_codes, max_uses, used_count, expires_at, active, created_at
+        FROM coupons
+        ORDER BY created_at DESC
+        LIMIT %s
+    """
+    return _q_all(sql, (limit,))
+
+
+def upsert_coupon(code: str, kind: str, value: str, plan_codes: str, max_uses, expire_hours):
+    code = (code or "").strip()
+    if not code:
+        raise ValueError("code required")
+    kind = (kind or "").strip().lower()
+    if kind not in ("percent", "fixed"):
+        raise ValueError("kind must be percent/fixed")
+    try:
+        v = float(value)
+    except Exception:
+        raise ValueError("bad value")
+    plan_codes = (plan_codes or "").strip() or None
+    max_uses_v = None
+    if str(max_uses).strip():
+        max_uses_v = int(max_uses)
+    expires_at = None
+    if str(expire_hours).strip():
+        expires_at = _utc_now() + timedelta(hours=int(expire_hours))
+    _exec(
+        """
+        INSERT INTO coupons (code, kind, value, plan_codes, max_uses, used_count, expires_at, active)
+        VALUES (%s,%s,%s,%s,%s,0,%s,1)
+        ON DUPLICATE KEY UPDATE kind=VALUES(kind), value=VALUES(value), plan_codes=VALUES(plan_codes), max_uses=VALUES(max_uses), expires_at=VALUES(expires_at), active=1
+        """,
+        (code, kind, str(v), plan_codes, max_uses_v, expires_at),
+    )
+
+
+def list_access_codes(limit: int) -> list[dict]:
+    limit = max(1, min(int(limit), 200))
+    sql = """
+        SELECT code, days, plan_code, max_uses, used_count, expires_at, note, created_by, created_at, last_used_at
+        FROM access_codes
+        ORDER BY created_at DESC
+        LIMIT %s
+    """
+    return _q_all(sql, (limit,))
+
+
+def upsert_access_code(code: str, days: int, max_uses: int, expire_hours, note: str, created_by: str):
+    code = (code or "").strip()
+    if not code:
+        raise ValueError("code required")
+    days = int(days)
+    if days == 0:
+        raise ValueError("days required")
+    max_uses = max(1, int(max_uses))
+    expires_at = None
+    if str(expire_hours).strip():
+        expires_at = _utc_now() + timedelta(hours=int(expire_hours))
+    _exec(
+        """
+        INSERT INTO access_codes (code, days, plan_code, max_uses, used_count, expires_at, note, created_by)
+        VALUES (%s,%s,NULL,%s,0,%s,%s,%s)
+        ON DUPLICATE KEY UPDATE days=VALUES(days), max_uses=VALUES(max_uses), expires_at=VALUES(expires_at), note=VALUES(note), created_by=VALUES(created_by)
+        """,
+        (code, days, max_uses, expires_at, (note or "")[:256] if note else None, created_by),
+    )
+
+
+def create_broadcast_job(segment: str, source: str, text: str, created_by: str) -> int:
+    segment = (segment or "").strip() or "all"
+    source = (source or "").strip() or None
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("text required")
+    parse_mode = None
+    button_text = None
+    button_url = None
+    disable_preview = 0
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO broadcast_jobs (segment, source, text, parse_mode, button_text, button_url, disable_preview, status, created_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,'created',%s)
+            """,
+            (segment, source, text, parse_mode, button_text, button_url, int(disable_preview), created_by),
+        )
+        bid = int(cur.lastrowid)
+        conn.commit()
+        cur.close()
+        return bid
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def create_broadcast_job_v2(
+    segment: str,
+    source: str,
+    text: str,
+    parse_mode: str,
+    button_text: str,
+    button_url: str,
+    disable_preview: int,
+    created_by: str,
+) -> int:
+    segment = (segment or "").strip() or "all"
+    source = (source or "").strip() or None
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("text required")
+    parse_mode = (parse_mode or "").strip() or None
+    if parse_mode and parse_mode not in ("HTML", "Markdown", "MarkdownV2"):
+        raise ValueError("bad parse_mode")
+    button_text = (button_text or "").strip() or None
+    button_url = (button_url or "").strip() or None
+    if button_text and not button_url:
+        raise ValueError("button_url required")
+    if button_url and not button_text:
+        button_text = "打开"
+    disable_preview = 1 if int(disable_preview or 0) == 1 else 0
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO broadcast_jobs (segment, source, text, parse_mode, button_text, button_url, disable_preview, status, created_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,'created',%s)
+            """,
+            (segment, source, text, parse_mode, button_text, button_url, disable_preview, created_by),
+        )
+        bid = int(cur.lastrowid)
+        conn.commit()
+        cur.close()
+        return bid
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def list_broadcast_jobs(limit: int) -> list[dict]:
+    limit = max(1, min(int(limit), 200))
+    sql = """
+        SELECT id, segment, source, status, created_by, created_at, started_at, finished_at, total, success, failed
+        FROM broadcast_jobs
+        ORDER BY created_at DESC
+        LIMIT %s
+    """
+    return _q_all(sql, (limit,))
+
+
+def list_broadcast_logs(job_id: int, limit: int) -> list[dict]:
+    job_id = int(job_id or 0)
+    limit = max(1, min(int(limit), 500))
+    if job_id <= 0:
+        return []
+    sql = """
+        SELECT telegram_id, status, error, created_at
+        FROM broadcast_logs
+        WHERE job_id=%s
+        ORDER BY created_at DESC
+        LIMIT %s
+    """
+    return _q_all(sql, (job_id, limit))
+
+
+_broadcast_lock = threading.Lock()
+_broadcast_running: set[int] = set()
+
+
+def _pick_broadcast_targets(segment: str, source: str | None) -> list[int]:
+    segment = (segment or "").strip() or "all"
+    where = ["(is_blacklisted IS NULL OR is_blacklisted=0)"]
+    params: list = []
+    if segment == "active":
+        where.append("paid_until IS NOT NULL AND paid_until > UTC_TIMESTAMP()")
+    elif segment == "expired":
+        where.append("paid_until IS NOT NULL AND paid_until <= UTC_TIMESTAMP()")
+    elif segment == "expiring1d":
+        where.append("paid_until IS NOT NULL AND paid_until BETWEEN UTC_TIMESTAMP() AND (UTC_TIMESTAMP() + INTERVAL 1 DAY)")
+    elif segment == "expiring3d":
+        where.append("paid_until IS NOT NULL AND paid_until BETWEEN UTC_TIMESTAMP() AND (UTC_TIMESTAMP() + INTERVAL 3 DAY)")
+    elif segment == "non_member":
+        where.append("(paid_until IS NULL OR paid_until <= UTC_TIMESTAMP())")
+    if source:
+        where.append("last_source=%s")
+        params.append(source)
+    sql = f"SELECT telegram_id FROM users WHERE {' AND '.join(where)} ORDER BY telegram_id DESC LIMIT 20000"
+    rows = _q_all(sql, tuple(params))
+    out: list[int] = []
+    for r in rows:
+        try:
+            out.append(int(r["telegram_id"]))
+        except Exception:
+            continue
+    return out
+
+
+def _broadcast_update(job_id: int, **fields):
+    sets = []
+    params = []
+    for k, v in fields.items():
+        sets.append(f"{k}=%s")
+        params.append(v)
+    if not sets:
+        return
+    params.append(int(job_id))
+    _exec(f"UPDATE broadcast_jobs SET {', '.join(sets)} WHERE id=%s", tuple(params))
+
+
+def _broadcast_log(job_id: int, telegram_id: int, status: str, error: str | None = None):
+    _exec(
+        "INSERT INTO broadcast_logs (job_id, telegram_id, status, error) VALUES (%s,%s,%s,%s)",
+        (int(job_id), int(telegram_id), status, (error or "")[:256] if error else None),
+    )
+
+
+def _run_broadcast(job_id: int):
+    row = _q_all("SELECT * FROM broadcast_jobs WHERE id=%s LIMIT 1", (int(job_id),))
+    if not row:
+        return
+    job = row[0]
+    segment = job.get("segment") or "all"
+    source = job.get("source")
+    text = job.get("text") or ""
+    parse_mode = (job.get("parse_mode") or "").strip() or None
+    button_text = (job.get("button_text") or "").strip() or None
+    button_url = (job.get("button_url") or "").strip() or None
+    disable_preview = int(job.get("disable_preview") or 0) == 1
+    targets = _pick_broadcast_targets(segment, source)
+    _broadcast_update(job_id, status="running", started_at=_utc_now(), total=len(targets), success=0, failed=0)
+    ok_n = 0
+    fail_n = 0
+    for uid in targets:
+        payload = {"chat_id": str(uid), "text": text}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        if disable_preview:
+            payload["disable_web_page_preview"] = "true"
+        if button_url:
+            bt = button_text or "打开"
+            payload["reply_markup"] = json.dumps(
+                {"inline_keyboard": [[{"text": bt, "url": button_url}]]},
+                ensure_ascii=False,
+            )
+        ok, res = _bot_api("sendMessage", payload)
+        if not ok and isinstance(res, dict) and res.get("retry_after"):
+            try:
+                time.sleep(float(res.get("retry_after") or 1))
+            except Exception:
+                time.sleep(1.0)
+            ok, res = _bot_api("sendMessage", payload)
+        if ok:
+            ok_n += 1
+            _broadcast_log(job_id, uid, "sent", None)
+        else:
+            fail_n += 1
+            _broadcast_log(job_id, uid, "failed", str(res))
+        _broadcast_update(job_id, success=ok_n, failed=fail_n)
+        sent = ok_n + fail_n
+        if sent >= int(BROADCAST_ABORT_MIN_SENT):
+            rate = float(fail_n) / max(1.0, float(sent))
+            if rate >= float(BROADCAST_ABORT_FAIL_RATE):
+                _broadcast_update(job_id, status="aborted", finished_at=_utc_now(), success=ok_n, failed=fail_n)
+                return
+        try:
+            time.sleep(max(0.0, float(BROADCAST_SLEEP_SEC)))
+        except Exception:
+            time.sleep(0.15)
+    _broadcast_update(job_id, status="done", finished_at=_utc_now(), success=ok_n, failed=fail_n)
+
+
+def run_broadcast_async(job_id: int) -> bool:
+    job_id = int(job_id or 0)
+    if job_id <= 0:
+        return False
+    with _broadcast_lock:
+        if job_id in _broadcast_running:
+            return False
+        _broadcast_running.add(job_id)
+
+    def _runner():
+        try:
+            _run_broadcast(job_id)
+        finally:
+            with _broadcast_lock:
+                _broadcast_running.discard(job_id)
+
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    return True
+
+
 def user_detail(telegram_id: int) -> dict:
     user_rows = _q_all(
-        "SELECT telegram_id, username, paid_until, total_received, wallet_addr, inviter_id, invite_count, created_at FROM users WHERE telegram_id=%s LIMIT 1",
+        "SELECT telegram_id, username, paid_until, total_received, wallet_addr, inviter_id, invite_count, is_blacklisted, is_whitelisted, note, first_source, last_source, last_source_at, created_at FROM users WHERE telegram_id=%s LIMIT 1",
         (telegram_id,),
     )
     user = user_rows[0] if user_rows else None
@@ -465,6 +995,31 @@ def user_extend_days(telegram_id: int, days: int, actor: str, note: str, ip: str
     return str(paid_until) if paid_until is not None else None
 
 
+def user_toggle_flags(telegram_id: int, toggle: str, note: str, actor: str, ip: str) -> dict:
+    telegram_id = int(telegram_id)
+    toggle = (toggle or "").strip()
+    note = (note or "").strip() or None
+    row = _q_all("SELECT is_blacklisted, is_whitelisted FROM users WHERE telegram_id=%s LIMIT 1", (telegram_id,))
+    if not row:
+        raise ValueError("user not found")
+    cur_black = int(row[0].get("is_blacklisted") or 0)
+    cur_white = int(row[0].get("is_whitelisted") or 0)
+    new_black = cur_black
+    new_white = cur_white
+    if toggle == "black":
+        new_black = 0 if cur_black == 1 else 1
+    elif toggle == "white":
+        new_white = 0 if cur_white == 1 else 1
+    else:
+        raise ValueError("bad toggle")
+    _exec(
+        "UPDATE users SET is_blacklisted=%s, is_whitelisted=%s, note=%s WHERE telegram_id=%s",
+        (new_black, new_white, note, telegram_id),
+    )
+    _audit(actor, "user_flags", telegram_id, {"toggle": toggle, "black": new_black, "white": new_white, "note": note, "ip": ip})
+    return {"is_blacklisted": new_black, "is_whitelisted": new_white}
+
+
 def _bot_api(method: str, payload: dict) -> tuple[bool, dict | str]:
     if not BOT_TOKEN:
         return False, "BOT_TOKEN missing"
@@ -477,7 +1032,11 @@ def _bot_api(method: str, payload: dict) -> tuple[bool, dict | str]:
         obj = json.loads(raw or "{}")
         if obj.get("ok"):
             return True, obj.get("result") or {}
-        return False, (obj.get("description") or raw)
+        d = obj.get("description") or raw
+        params = obj.get("parameters") or {}
+        if isinstance(params, dict) and params.get("retry_after"):
+            return False, {"description": d, "retry_after": params.get("retry_after")}
+        return False, d
     except Exception as e:
         return False, f"{type(e).__name__}: {e}"
 
@@ -485,11 +1044,13 @@ def _bot_api(method: str, payload: dict) -> tuple[bool, dict | str]:
 def resend_invite_link(telegram_id: int, actor: str, note: str, ip: str) -> tuple[bool, str]:
     if telegram_id <= 0:
         return False, "bad telegram_id"
-    exp = int((_utc_now() + timedelta(hours=24)).timestamp())
-    ok, res = _bot_api(
-        "createChatInviteLink",
-        {"chat_id": str(PAID_CHANNEL_ID), "expire_date": str(exp), "member_limit": "1"},
-    )
+    exp = int((_utc_now() + timedelta(hours=int(JOIN_REQUEST_LINK_EXPIRE_HOURS))).timestamp())
+    payload = {"chat_id": str(PAID_CHANNEL_ID), "expire_date": str(exp)}
+    if JOIN_REQUEST_ENABLE:
+        payload["creates_join_request"] = "true"
+    else:
+        payload["member_limit"] = "1"
+    ok, res = _bot_api("createChatInviteLink", payload)
     if not ok:
         _audit(actor, "resend_invite_failed", telegram_id, {"note": note, "ip": ip, "error": str(res)})
         return False, str(res)
@@ -497,7 +1058,7 @@ def resend_invite_link(telegram_id: int, actor: str, note: str, ip: str) -> tupl
     if not link:
         _audit(actor, "resend_invite_failed", telegram_id, {"note": note, "ip": ip, "error": "empty invite_link"})
         return False, "empty invite_link"
-    msg = f"✅ 入群链接（24h有效，仅限1人）：\n{link}"
+    msg = f"✅ 入群链接（{int(JOIN_REQUEST_LINK_EXPIRE_HOURS)}h有效）：\n{link}"
     ok2, res2 = _bot_api("sendMessage", {"chat_id": str(telegram_id), "text": msg})
     if not ok2:
         _audit(actor, "resend_invite_failed", telegram_id, {"note": note, "ip": ip, "error": str(res2)})

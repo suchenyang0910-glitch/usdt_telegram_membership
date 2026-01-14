@@ -1,4 +1,5 @@
 # core/models.py
+import json
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import List, Dict, Optional
@@ -137,6 +138,74 @@ def init_tables():
         """
     )
 
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS coupons (
+            code          VARCHAR(32) PRIMARY KEY,
+            kind          VARCHAR(16) NOT NULL,
+            value         DECIMAL(18,6) NOT NULL,
+            plan_codes    VARCHAR(256) NULL,
+            max_uses      INT NULL,
+            used_count    INT DEFAULT 0,
+            expires_at    DATETIME NULL,
+            active        TINYINT DEFAULT 1,
+            created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS access_codes (
+            code          VARCHAR(64) PRIMARY KEY,
+            days          INT NOT NULL,
+            plan_code     VARCHAR(32) NULL,
+            max_uses      INT DEFAULT 1,
+            used_count    INT DEFAULT 0,
+            expires_at    DATETIME NULL,
+            note          VARCHAR(256) NULL,
+            created_by    VARCHAR(128) NULL,
+            created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_used_at  DATETIME NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS broadcast_jobs (
+            id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+            segment       VARCHAR(64) NOT NULL,
+            source        VARCHAR(64) NULL,
+            text          TEXT NOT NULL,
+            parse_mode    VARCHAR(16) NULL,
+            status        VARCHAR(16) NOT NULL,
+            created_by    VARCHAR(128) NULL,
+            created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+            started_at    DATETIME NULL,
+            finished_at   DATETIME NULL,
+            total         INT DEFAULT 0,
+            success       INT DEFAULT 0,
+            failed        INT DEFAULT 0
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS broadcast_logs (
+            id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+            job_id        BIGINT NOT NULL,
+            telegram_id   BIGINT NOT NULL,
+            status        VARCHAR(16) NOT NULL,
+            error         VARCHAR(256) NULL,
+            created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_broadcast_logs_job (job_id, created_at),
+            INDEX idx_broadcast_logs_uid (telegram_id, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+    )
+
     conn.commit()
 
     _ensure_columns(
@@ -146,6 +215,25 @@ def init_tables():
             "remind_3d_at": "remind_3d_at DATETIME NULL",
             "remind_1d_at": "remind_1d_at DATETIME NULL",
             "expired_handled_at": "expired_handled_at DATETIME NULL",
+            "first_source": "first_source VARCHAR(64) NULL",
+            "first_source_at": "first_source_at DATETIME NULL",
+            "last_source": "last_source VARCHAR(64) NULL",
+            "last_source_at": "last_source_at DATETIME NULL",
+            "pending_coupon": "pending_coupon VARCHAR(32) NULL",
+            "is_blacklisted": "is_blacklisted TINYINT DEFAULT 0",
+            "is_whitelisted": "is_whitelisted TINYINT DEFAULT 0",
+            "note": "note VARCHAR(256) NULL",
+        },
+    )
+
+    _ensure_columns(
+        conn,
+        "orders",
+        {
+            "base_amount": "base_amount DECIMAL(18,6) NULL",
+            "discount_amount": "discount_amount DECIMAL(18,6) NULL",
+            "coupon_code": "coupon_code VARCHAR(32) NULL",
+            "coupon_used": "coupon_used TINYINT DEFAULT 0",
         },
     )
 
@@ -156,7 +244,19 @@ def init_tables():
             ("usdt_txs", "idx_usdt_txs_addr_status", "INDEX idx_usdt_txs_addr_status (addr, status)"),
             ("address_pool", "idx_address_pool_assigned", "INDEX idx_address_pool_assigned (assigned_to)"),
             ("orders", "idx_orders_status_amount", "INDEX idx_orders_status_amount (status, amount, created_at)"),
+            ("users", "idx_users_paid_until", "INDEX idx_users_paid_until (paid_until)"),
+            ("users", "idx_users_source", "INDEX idx_users_source (last_source, last_source_at)"),
         ],
+    )
+
+    _ensure_columns(
+        conn,
+        "broadcast_jobs",
+        {
+            "button_text": "button_text VARCHAR(64) NULL",
+            "button_url": "button_url VARCHAR(512) NULL",
+            "disable_preview": "disable_preview TINYINT DEFAULT 0",
+        },
     )
 
     _sync_address_pool(conn)
@@ -238,6 +338,184 @@ def upsert_user_basic(telegram_id: int, username: str, language: str):
         VALUES (%s, %s, %s)
         ON DUPLICATE KEY UPDATE username=%s, language=%s
     """, (telegram_id, username, language, username, language))
+    conn.commit()
+    cur.close(); conn.close()
+
+
+def set_user_source(telegram_id: int, source: str):
+    source = (source or "").strip()
+    if not source:
+        return
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE users
+        SET
+          first_source = COALESCE(first_source, %s),
+          first_source_at = COALESCE(first_source_at, UTC_TIMESTAMP()),
+          last_source = %s,
+          last_source_at = UTC_TIMESTAMP()
+        WHERE telegram_id=%s
+        """,
+        (source, source, int(telegram_id)),
+    )
+    conn.commit()
+    cur.close(); conn.close()
+
+
+def set_user_pending_coupon(telegram_id: int, coupon_code: str | None):
+    coupon_code = (coupon_code or "").strip()
+    if coupon_code == "":
+        coupon_code = None
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("UPDATE users SET pending_coupon=%s WHERE telegram_id=%s", (coupon_code, int(telegram_id)))
+    conn.commit()
+    cur.close(); conn.close()
+
+
+def admin_audit_log(actor: str, action: str, target_id: int | None, payload: dict):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO admin_audit (actor, action, target_id, payload) VALUES (%s,%s,%s,%s)",
+        (actor, action, target_id, json.dumps(payload, ensure_ascii=False)),
+    )
+    conn.commit()
+    cur.close(); conn.close()
+
+
+def create_access_code(
+    code: str,
+    days: int,
+    plan_code: str | None,
+    max_uses: int,
+    expires_at: datetime | None,
+    note: str | None,
+    created_by: str | None,
+):
+    code = (code or "").strip()
+    if not code:
+        raise ValueError("code required")
+    days = int(days)
+    if days == 0:
+        raise ValueError("days required")
+    max_uses = max(1, int(max_uses))
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO access_codes (code, days, plan_code, max_uses, used_count, expires_at, note, created_by)
+        VALUES (%s,%s,%s,%s,0,%s,%s,%s)
+        ON DUPLICATE KEY UPDATE days=VALUES(days), plan_code=VALUES(plan_code), max_uses=VALUES(max_uses), expires_at=VALUES(expires_at), note=VALUES(note), created_by=VALUES(created_by)
+        """,
+        (code, days, plan_code, max_uses, expires_at, (note or "")[:256] if note else None, created_by),
+    )
+    conn.commit()
+    cur.close(); conn.close()
+
+
+def get_access_code(code: str) -> Optional[Dict]:
+    code = (code or "").strip()
+    if not code:
+        return None
+    conn = get_conn(); cur = conn.cursor(dictionary=True)
+    cur.execute("SELECT * FROM access_codes WHERE code=%s LIMIT 1", (code,))
+    row = cur.fetchone()
+    cur.close(); conn.close()
+    return row
+
+
+def redeem_access_code(code: str, telegram_id: int) -> tuple[bool, str, datetime | None, int]:
+    code = (code or "").strip()
+    if not code:
+        return False, "code empty", None, 0
+    telegram_id = int(telegram_id)
+    conn = get_conn()
+    try:
+        conn.start_transaction()
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT is_blacklisted, is_whitelisted FROM users WHERE telegram_id=%s FOR UPDATE", (telegram_id,))
+        urow = cur.fetchone() or {}
+        if int(urow.get("is_blacklisted") or 0) == 1 and int(urow.get("is_whitelisted") or 0) != 1:
+            conn.rollback()
+            return False, "user blacklisted", None, 0
+        cur.execute("SELECT * FROM access_codes WHERE code=%s FOR UPDATE", (code,))
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            return False, "code not found", None, 0
+        expires_at = row.get("expires_at")
+        if expires_at and expires_at <= datetime.utcnow():
+            conn.rollback()
+            return False, "code expired", None, 0
+        used = int(row.get("used_count") or 0)
+        max_uses = int(row.get("max_uses") or 1)
+        if used >= max_uses:
+            conn.rollback()
+            return False, "code used up", None, 0
+        days = int(row.get("days") or 0)
+        if days == 0:
+            conn.rollback()
+            return False, "bad code", None, 0
+        plan_code = (row.get("plan_code") or "ACCESS").strip()
+
+        cur2 = conn.cursor()
+        cur2.execute(
+            """
+            UPDATE access_codes
+            SET used_count=used_count+1, last_used_at=UTC_TIMESTAMP()
+            WHERE code=%s
+            """,
+            (code,),
+        )
+        cur2.execute(
+            """
+            UPDATE users
+            SET paid_until = DATE_ADD(
+              IF(paid_until IS NULL OR paid_until < UTC_TIMESTAMP(), UTC_TIMESTAMP(), paid_until),
+              INTERVAL %s DAY
+            ),
+            last_plan=%s
+            WHERE telegram_id=%s
+            """,
+            (days, plan_code, telegram_id),
+        )
+        conn.commit()
+
+        cur3 = conn.cursor()
+        cur3.execute("SELECT paid_until FROM users WHERE telegram_id=%s", (telegram_id,))
+        paid_row = cur3.fetchone()
+        paid_until = paid_row[0] if paid_row else None
+        return True, "", paid_until, days
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False, f"{type(e).__name__}: {e}", None, 0
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def set_user_flags(telegram_id: int, is_blacklisted: bool | int | None, is_whitelisted: bool | int | None, note: str | None):
+    telegram_id = int(telegram_id)
+    b = None if is_blacklisted is None else (1 if bool(is_blacklisted) else 0)
+    w = None if is_whitelisted is None else (1 if bool(is_whitelisted) else 0)
+    note_v = (note or "").strip()
+    if note_v == "":
+        note_v = None
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE users
+        SET is_blacklisted=COALESCE(%s, is_blacklisted),
+            is_whitelisted=COALESCE(%s, is_whitelisted),
+            note=%s
+        WHERE telegram_id=%s
+        """,
+        (b, w, (note_v or "")[:256] if note_v else None, telegram_id),
+    )
     conn.commit()
     cur.close(); conn.close()
 
@@ -419,8 +697,8 @@ def create_pending_order(telegram_id: int, addr: str, amount: Decimal, plan_code
     conn = get_conn(); cur = conn.cursor()
     cur.execute(
         """
-        INSERT INTO orders (telegram_id, addr, amount, plan_code, status, tx_id)
-        VALUES (%s, %s, %s, %s, 'pending', NULL)
+        INSERT INTO orders (telegram_id, addr, amount, base_amount, discount_amount, coupon_code, coupon_used, plan_code, status, tx_id)
+        VALUES (%s, %s, %s, NULL, NULL, NULL, 0, %s, 'pending', NULL)
         """,
         (telegram_id, addr, str(amount), plan_code),
     )
@@ -428,6 +706,126 @@ def create_pending_order(telegram_id: int, addr: str, amount: Decimal, plan_code
     conn.commit()
     cur.close(); conn.close()
     return int(order_id)
+
+
+def get_coupon(code: str) -> Optional[Dict]:
+    code = (code or "").strip()
+    if not code:
+        return None
+    conn = get_conn(); cur = conn.cursor(dictionary=True)
+    cur.execute("SELECT * FROM coupons WHERE code=%s LIMIT 1", (code,))
+    row = cur.fetchone()
+    cur.close(); conn.close()
+    return row
+
+
+def _coupon_applicable(coupon: Dict, plan_code: str, now: datetime) -> bool:
+    if not coupon:
+        return False
+    if int(coupon.get("active") or 0) != 1:
+        return False
+    exp = coupon.get("expires_at")
+    if exp and exp <= now:
+        return False
+    max_uses = coupon.get("max_uses")
+    used = int(coupon.get("used_count") or 0)
+    if max_uses is not None and used >= int(max_uses):
+        return False
+    plan_codes = (coupon.get("plan_codes") or "").strip()
+    if plan_codes:
+        allowed = {x.strip() for x in plan_codes.split(",") if x.strip()}
+        if allowed and plan_code not in allowed:
+            return False
+    return True
+
+
+def coupon_basic_valid(code: str) -> bool:
+    c = get_coupon(code)
+    if not c:
+        return False
+    if int(c.get("active") or 0) != 1:
+        return False
+    exp = c.get("expires_at")
+    if exp and exp <= datetime.utcnow():
+        return False
+    max_uses = c.get("max_uses")
+    used = int(c.get("used_count") or 0)
+    if max_uses is not None and used >= int(max_uses):
+        return False
+    return True
+
+
+def _apply_coupon(base_amount: Decimal, coupon: Dict) -> tuple[Decimal, Decimal]:
+    base_amount = Decimal(str(base_amount))
+    kind = (coupon.get("kind") or "").strip().lower()
+    value = Decimal(str(coupon.get("value") or 0))
+    discount = Decimal("0")
+    if kind == "percent":
+        if value > 0:
+            discount = (base_amount * value / Decimal("100"))
+    elif kind == "fixed":
+        if value > 0:
+            discount = value
+    if discount < 0:
+        discount = Decimal("0")
+    if discount > base_amount:
+        discount = base_amount
+    final = base_amount - discount
+    if final < Decimal("0.01"):
+        final = Decimal("0.01")
+        discount = base_amount - final
+    final = final.quantize(Decimal("0.000001"))
+    discount = discount.quantize(Decimal("0.000001"))
+    return final, discount
+
+
+def compute_amount_after_coupon(base_amount: Decimal, plan_code: str, coupon_code: str | None) -> tuple[Decimal, Decimal, str | None]:
+    now = datetime.utcnow()
+    base_amount = Decimal(str(base_amount)).quantize(Decimal("0.000001"))
+    coupon_code = (coupon_code or "").strip() or None
+    if not coupon_code:
+        return base_amount, Decimal("0.000000"), None
+    coupon = get_coupon(coupon_code)
+    if not coupon or not _coupon_applicable(coupon, plan_code, now):
+        return base_amount, Decimal("0.000000"), None
+    final, discount = _apply_coupon(base_amount, coupon)
+    return final, discount, coupon_code
+
+
+def create_pending_order_priced(
+    telegram_id: int,
+    addr: str,
+    amount: Decimal,
+    base_amount: Decimal,
+    plan_code: str,
+    coupon_code: str | None,
+) -> tuple[int, Decimal]:
+    now = datetime.utcnow()
+    amount = Decimal(str(amount)).quantize(Decimal("0.000001"))
+    base_amount = Decimal(str(base_amount)).quantize(Decimal("0.000001"))
+    coupon_code = (coupon_code or "").strip() or None
+    final_amount = amount
+    discount_amount = Decimal("0.000000")
+    applied_code = None
+    if coupon_code:
+        coupon = get_coupon(coupon_code)
+        if coupon and _coupon_applicable(coupon, plan_code, now):
+            discounted, discount_amount = _apply_coupon(base_amount, coupon)
+            final_amount = discounted
+            applied_code = coupon_code
+
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO orders (telegram_id, addr, amount, base_amount, discount_amount, coupon_code, coupon_used, plan_code, status, tx_id)
+        VALUES (%s, %s, %s, %s, %s, %s, 0, %s, 'pending', NULL)
+        """,
+        (int(telegram_id), addr, str(amount), str(base_amount), str(discount_amount), applied_code, plan_code),
+    )
+    order_id = cur.lastrowid
+    conn.commit()
+    cur.close(); conn.close()
+    return int(order_id), final_amount
 
 
 def match_pending_order_by_amount(addr: str, amount: Decimal, eps: Decimal) -> Optional[Dict]:
@@ -457,6 +855,18 @@ def mark_order_success(order_id: int, tx_id: str):
     )
     conn.commit()
     cur.close(); conn.close()
+
+    conn2 = get_conn(); cur2 = conn2.cursor()
+    cur2.execute("SELECT coupon_code, coupon_used FROM orders WHERE id=%s LIMIT 1", (order_id,))
+    row = cur2.fetchone()
+    if row:
+        coupon_code = row[0]
+        coupon_used = int(row[1] or 0)
+        if coupon_code and coupon_used == 0:
+            cur2.execute("UPDATE orders SET coupon_used=1 WHERE id=%s", (order_id,))
+            cur2.execute("UPDATE coupons SET used_count=used_count+1 WHERE code=%s", (coupon_code,))
+            conn2.commit()
+    cur2.close(); conn2.close()
 
 
 def get_success_orders_between(start: datetime, end: datetime) -> List[Dict]:
