@@ -218,6 +218,8 @@ def _record_success(st: dict, key: str):
     t["fail_count"] = 0
     t["last_ok_ts"] = _now_ts()
     t["circuit_until_ts"] = 0
+    t["unhealthy_count"] = 0
+    t["first_unhealthy_ts"] = 0
     _state_set_target(st, key, t)
 
 
@@ -226,6 +228,9 @@ def _record_failure(st: dict, key: str, reason: str):
     t["fail_count"] = int(t.get("fail_count") or 0) + 1
     t["last_fail_ts"] = _now_ts()
     t["last_reason"] = (reason or "")[:800]
+    t["unhealthy_count"] = int(t.get("unhealthy_count") or 0) + 1
+    if not int(t.get("first_unhealthy_ts") or 0):
+        t["first_unhealthy_ts"] = _now_ts()
     _state_set_target(st, key, t)
 
 
@@ -263,6 +268,20 @@ def _circuit_allows_restart(st: dict, key: str) -> tuple[bool, str]:
     t["circuit_until_ts"] = now + int(open_min) * 60
     _state_set_target(st, key, t)
     return False, f"circuit opened for {open_min}min (restarts={len(recent)}/{max_n} in {window_min}min)"
+
+
+def _unhealthy_allows_restart(st: dict, key: str) -> tuple[bool, str]:
+    t = _state_get_target(st, key)
+    grace = _env_int("WATCHDOG_HEARTBEAT_GRACE_SEC", 180)
+    confirm = _env_int("WATCHDOG_UNHEALTHY_CONFIRM", 2)
+    now = _now_ts()
+    first = int(t.get("first_unhealthy_ts") or 0)
+    if first and grace and (now - first) < int(grace):
+        return False, f"within grace ({now-first}s/{grace}s)"
+    unhealthy = int(t.get("unhealthy_count") or 0)
+    if unhealthy < int(confirm):
+        return False, f"unhealthy confirm ({unhealthy}/{confirm})"
+    return True, ""
 
 
 def _tail_lines(text: str, max_chars: int) -> str:
@@ -470,6 +489,14 @@ def _docker_check_and_fix(compose_dir: str, services: list[str], heartbeat_map: 
                     _tg_send(msg[:3500])
                     continue
                 _record_failure(st, key, reason)
+                ok_h, h_reason = _unhealthy_allows_restart(st, key)
+                if not ok_h:
+                    tail = _docker_tail(compose_dir, svc)
+                    msg = f"[watchdog] docker service {svc} unhealthy (no restart)\nreason={reason}\n{h_reason}"
+                    if tail:
+                        msg = msg + "\n\n" + tail
+                    _tg_send(msg[:3500])
+                    continue
                 tail = _docker_tail(compose_dir, svc)
                 msg = f"[watchdog] docker service {svc} unhealthy, restarting...\n{reason}"
                 if tail and _env("WATCHDOG_INCLUDE_LOGS_ON", "fail") in ("always", "pre"):
@@ -496,7 +523,11 @@ def _docker_check_and_fix(compose_dir: str, services: list[str], heartbeat_map: 
         if tail and _env("WATCHDOG_INCLUDE_LOGS_ON", "fail") in ("always", "pre"):
             msg = msg + "\n\n" + tail
         _tg_send(msg[:3500])
-        rc2, out2 = _run(base + ["up", "-d", "--force-recreate", svc], cwd=compose_dir)
+        up_cmd = base + ["up", "-d", "--force-recreate"]
+        if _env("WATCHDOG_DOCKER_RESTART_BUILD", "0") == "1":
+            up_cmd.append("--build")
+        up_cmd.append(svc)
+        rc2, out2 = _run(up_cmd, cwd=compose_dir)
         _record_restart(st, key)
         time.sleep(2)
         rc3, out3 = _run(base + ["ps", svc, "--status", "running", "--services"], cwd=compose_dir)
