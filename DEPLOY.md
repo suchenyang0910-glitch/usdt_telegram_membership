@@ -78,3 +78,25 @@ sudo systemctl status pvadmin
 - 需要在 `/opt/pvbot/.env` 里设置 `ADMIN_WEB_USER/ADMIN_WEB_PASS`
 - 如需只允许本机访问，将 `ADMIN_WEB_HOST` 设为 `127.0.0.1`
 
+### watchdog（可选，推荐开启无人值守）
+
+watchdog 会周期性检查服务是否“在跑”，并可选按心跳文件判断“是否卡死/不工作”，必要时自动重启并通知 Telegram。
+
+安装并启动 timer：
+
+```bash
+sudo cp /opt/pvbot/deploy/pvbot-watchdog.service /etc/systemd/system/pvbot-watchdog.service
+sudo cp /opt/pvbot/deploy/pvbot-watchdog.timer /etc/systemd/system/pvbot-watchdog.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now pvbot-watchdog.timer
+sudo systemctl status pvbot-watchdog.timer
+```
+
+建议在 `/opt/pvbot/.env` 增加（按实际服务名调整）：
+- `WATCHDOG_ENABLE=1`
+- `WATCHDOG_MODE=systemd`
+- `WATCHDOG_SYSTEMD_UNITS=pvbot.service,pvadmin.service`
+- `WATCHDOG_PROJECT_DIR=/opt/pvbot`
+- `WATCHDOG_HEARTBEAT_MAP=pvbot.service:tmp/heartbeat_app.json`
+- `WATCHDOG_HEARTBEAT_MAX_AGE_SEC=300`
+

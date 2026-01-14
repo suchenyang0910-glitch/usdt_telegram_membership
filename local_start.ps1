@@ -9,7 +9,8 @@ if (-not (Test-Path $envFile)) {
 Get-Content $envFile -Encoding UTF8 | ForEach-Object {
   if ($_ -match '^\s*#' -or $_ -match '^\s*$') { return }
   $k,$v = $_ -split '=',2
-  [Environment]::SetEnvironmentVariable($k.Trim(), $v.Trim(), 'Process')
+  $key = $k.Trim().Trim([char]0xFEFF)
+  [Environment]::SetEnvironmentVariable($key, $v.Trim(), 'Process')
 }
 
 python (Join-Path $PSScriptRoot "local_userbot_pool.py")

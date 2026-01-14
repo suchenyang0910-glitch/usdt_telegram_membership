@@ -5,6 +5,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def _abs_path(p: str) -> str:
+    p = (p or "").strip()
+    if not p:
+        return PROJECT_ROOT
+    if os.path.isabs(p):
+        return p
+    return os.path.join(PROJECT_ROOT, p)
+
 # Telegram Bot
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 BOT_USERNAME = os.getenv("BOT_USERNAME")
@@ -114,12 +125,15 @@ PLANS = [
 AMOUNT_EPS = Decimal("0.000001")  # 金额容差
 
 # 剪辑
-DOWNLOAD_DIR = "tmp/downloads"
-CLIP_DIR     = "tmp/clips"
+DOWNLOAD_DIR = _abs_path(os.getenv("DOWNLOAD_DIR", "tmp/downloads"))
+CLIP_DIR     = _abs_path(os.getenv("CLIP_DIR", "tmp/clips"))
 CLIP_SECONDS = int(os.getenv("CLIP_SECONDS", "30"))
 CLIP_RANDOM  = os.getenv("CLIP_RANDOM", "1") == "1"
 SEND_RETRY   = 3
 MAX_TG_DOWNLOAD_MB = int(os.getenv("MAX_TG_DOWNLOAD_MB", "19"))
+
+HEARTBEAT_FILE = _abs_path(os.getenv("HEARTBEAT_FILE", "tmp/heartbeat_app.json"))
+HEARTBEAT_INTERVAL_SEC = int(os.getenv("HEARTBEAT_INTERVAL_SEC", "60"))
 
 USERBOT_ENABLE = os.getenv("USERBOT_ENABLE", "0") == "1"
 USERBOT_API_ID = int(os.getenv("USERBOT_API_ID", "0") or 0)
@@ -151,8 +165,8 @@ INVITE_REWARD = {
 }
 
 # 日志
-LOG_FILE = "logs/bot.log"
-RUNTIME_LOG_FILE = os.getenv("RUNTIME_LOG_FILE", "logs/runtime.log")
+LOG_FILE = _abs_path(os.getenv("LOG_FILE", "logs/bot.log"))
+RUNTIME_LOG_FILE = _abs_path(os.getenv("RUNTIME_LOG_FILE", "logs/runtime.log"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", str(10 * 1024 * 1024)))
 LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "10"))

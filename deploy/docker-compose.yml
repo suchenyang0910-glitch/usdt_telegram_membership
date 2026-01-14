@@ -14,6 +14,11 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,time,sys; p='/app/tmp/heartbeat_app.json'; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 300 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
 
   userbot:
     build:
@@ -31,6 +36,11 @@ services:
     stdin_open: true
     tty: true
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,time,sys; p='/app/tmp/heartbeat_userbot.json'; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 600 else 1)\""]
+      interval: 60s
+      timeout: 5s
+      retries: 5
 
   admin:
     profiles: ["admin"]
@@ -53,6 +63,11 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import sys,urllib.request; import socket; socket.setdefaulttimeout(3); urllib.request.urlopen('http://127.0.0.1:8080/health'); sys.exit(0)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
 
   mysql:
     image: mysql:8.0

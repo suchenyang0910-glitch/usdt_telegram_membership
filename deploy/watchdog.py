@@ -17,6 +17,51 @@ def _env_int(name: str, default: int) -> int:
     return int(v)
 
 
+def _project_dir(mode: str) -> str:
+    explicit = _env("WATCHDOG_PROJECT_DIR", "")
+    if explicit:
+        return explicit
+    if mode == "docker":
+        compose_dir = _env("WATCHDOG_DOCKER_COMPOSE_DIR", "/opt/pvbot/usdt_telegram_membership/deploy")
+        return os.path.abspath(os.path.join(compose_dir, ".."))
+    return _env("WATCHDOG_PROJECT_DIR", "/opt/pvbot/usdt_telegram_membership")
+
+
+def _abs_in_project(project_dir: str, path: str) -> str:
+    path = (path or "").strip()
+    if not path:
+        return path
+    if os.path.isabs(path):
+        return path
+    return os.path.join(project_dir, path)
+
+
+def _parse_heartbeat_map(raw: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        k, v = part.split(":", 1)
+        k = k.strip()
+        v = v.strip()
+        if k and v:
+            out[k] = v
+    return out
+
+
+def _check_heartbeat(path: str, max_age_sec: int) -> tuple[bool, str]:
+    try:
+        if not os.path.exists(path):
+            return False, f"heartbeat missing: {path}"
+        age = float(time.time() - os.path.getmtime(path))
+        if age > float(max_age_sec):
+            return False, f"heartbeat stale age={int(age)}s path={path}"
+        return True, ""
+    except Exception as e:
+        return False, f"heartbeat check error: {type(e).__name__}: {e}"
+
+
 def _pick_chat_id() -> int | None:
     for key in ("WATCHDOG_CHAT_ID", "SUPPORT_GROUP_ID", "ADMIN_REPORT_CHAT_ID"):
         v = _env(key, "")
@@ -94,17 +139,28 @@ def _run(cmd: list[str], cwd: str | None = None) -> tuple[int, str]:
     return res.returncode, out.strip()
 
 
-def _systemd_check_and_fix(units: list[str]):
+def _systemd_check_and_fix(units: list[str], heartbeat_map: dict[str, str], project_dir: str, max_age_sec: int):
     print(f"[watchdog] mode=systemd units={units}")
     for unit in units:
         if not unit:
             continue
         rc, _ = _run(["systemctl", "is-active", unit])
         if rc == 0:
-            print(f"[watchdog] {unit} active")
-            continue
-        print(f"[watchdog] {unit} not active -> restart")
-        _tg_send(f"[watchdog] {unit} not active, restarting...")
+            hb_rel = heartbeat_map.get(unit, "")
+            if hb_rel:
+                hb = _abs_in_project(project_dir, hb_rel)
+                ok_hb, reason = _check_heartbeat(hb, max_age_sec)
+                if ok_hb:
+                    print(f"[watchdog] {unit} active")
+                    continue
+                print(f"[watchdog] {unit} unhealthy -> restart ({reason})")
+                _tg_send(f"[watchdog] {unit} unhealthy, restarting...\n{reason}")
+            else:
+                print(f"[watchdog] {unit} active")
+                continue
+        else:
+            print(f"[watchdog] {unit} not active -> restart")
+            _tg_send(f"[watchdog] {unit} not active, restarting...")
         rc2, out2 = _run(["systemctl", "restart", unit])
         time.sleep(2)
         rc3, _ = _run(["systemctl", "is-active", unit])
@@ -116,7 +172,7 @@ def _systemd_check_and_fix(units: list[str]):
             _tg_send(f"[watchdog] {unit} restart FAILED\n{out2[:800]}")
 
 
-def _docker_check_and_fix(compose_dir: str, services: list[str]):
+def _docker_check_and_fix(compose_dir: str, services: list[str], heartbeat_map: dict[str, str], project_dir: str, max_age_sec: int):
     print(f"[watchdog] mode=docker compose_dir={compose_dir} services={services}")
     base = ["docker", "compose"]
     all_ok = True
@@ -126,8 +182,19 @@ def _docker_check_and_fix(compose_dir: str, services: list[str]):
         rc, out = _run(base + ["ps", svc, "--status", "running", "--services"], cwd=compose_dir)
         running = (rc == 0) and (svc in (out.splitlines() if out else []))
         if running:
-            print(f"[watchdog] {svc} running")
-            continue
+            hb_rel = heartbeat_map.get(svc, "")
+            if hb_rel:
+                hb = _abs_in_project(project_dir, hb_rel)
+                ok_hb, reason = _check_heartbeat(hb, max_age_sec)
+                if ok_hb:
+                    print(f"[watchdog] {svc} running")
+                    continue
+                all_ok = False
+                print(f"[watchdog] {svc} unhealthy -> up -d --force-recreate ({reason})")
+                _tg_send(f"[watchdog] docker service {svc} unhealthy, restarting...\n{reason}")
+            else:
+                print(f"[watchdog] {svc} running")
+                continue
         all_ok = False
         print(f"[watchdog] {svc} not running -> up -d --force-recreate")
         _tg_send(f"[watchdog] docker service {svc} not running, restarting...")
@@ -166,14 +233,17 @@ def main():
 
     mode = _auto_mode()
     print(f"[watchdog] selected_mode={mode}")
+    project_dir = _project_dir(mode)
+    max_age_sec = _env_int("WATCHDOG_HEARTBEAT_MAX_AGE_SEC", 300)
+    heartbeat_map = _parse_heartbeat_map(_env("WATCHDOG_HEARTBEAT_MAP", ""))
     if mode == "docker":
         compose_dir = _env("WATCHDOG_DOCKER_COMPOSE_DIR", "/opt/pvbot/usdt_telegram_membership/deploy")
         services = [x.strip() for x in _env("WATCHDOG_DOCKER_SERVICES", "app,mysql,userbot").split(",") if x.strip()]
-        _docker_check_and_fix(compose_dir, services)
+        _docker_check_and_fix(compose_dir, services, heartbeat_map, project_dir, max_age_sec)
         return
 
     units = [x.strip() for x in _env("WATCHDOG_SYSTEMD_UNITS", "pvbot.service").split(",") if x.strip()]
-    _systemd_check_and_fix(units)
+    _systemd_check_and_fix(units, heartbeat_map, project_dir, max_age_sec)
 
 
 if __name__ == "__main__":

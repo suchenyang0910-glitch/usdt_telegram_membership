@@ -1,7 +1,9 @@
 # bot/scheduler.py
 from datetime import datetime, timedelta
 from decimal import Decimal
+import json
 import os
+import time
 
 from telegram.ext import ContextTypes
 
@@ -24,6 +26,7 @@ from config import (
     HEALTH_ALERT_MIN_INTERVAL_MINUTES,
     JOIN_REQUEST_ENABLE,
     JOIN_REQUEST_LINK_EXPIRE_HOURS,
+    HEARTBEAT_FILE,
 )
 from core.models import (
     get_all_users,
@@ -57,10 +60,10 @@ _last_health_alert_ts = None
 
 async def cleanup_downloads_job(context: ContextTypes.DEFAULT_TYPE):
     roots = [
-        os.path.join("tmp", "downloads"),
-        os.path.join("tmp", "clips"),
-        os.path.join("tmp", "userbot", "downloads"),
-        os.path.join("tmp", "userbot", "clips"),
+        os.path.join(os.path.dirname(HEARTBEAT_FILE) or "tmp", "downloads"),
+        os.path.join(os.path.dirname(HEARTBEAT_FILE) or "tmp", "clips"),
+        os.path.join(os.path.dirname(HEARTBEAT_FILE) or "tmp", "userbot", "downloads"),
+        os.path.join(os.path.dirname(HEARTBEAT_FILE) or "tmp", "userbot", "clips"),
     ]
     removed = 0
     for root in roots:
@@ -79,6 +82,21 @@ async def cleanup_downloads_job(context: ContextTypes.DEFAULT_TYPE):
             continue
     if removed:
         logger.info("[tmp] cleanup_downloads_job removed=%s", removed)
+
+
+async def heartbeat_job(context: ContextTypes.DEFAULT_TYPE):
+    p = str(HEARTBEAT_FILE or "").strip()
+    if not p:
+        return
+    try:
+        os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+        tmp = p + ".tmp"
+        payload = {"ts": int(time.time()), "iso": datetime.utcnow().isoformat(), "pid": os.getpid()}
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        os.replace(tmp, p)
+    except Exception:
+        return
 
 async def cleanup_logs_job(context: ContextTypes.DEFAULT_TYPE):
     removed = cleanup_old_logs(LOG_RETENTION_DAYS)

@@ -15,6 +15,35 @@ from telethon.errors import FileReferenceExpiredError
 logger = logging.getLogger("local_userbot")
 
 
+def _maybe_load_local_env():
+    if os.getenv("LOCAL_USERBOT_API_ID", "").strip():
+        return
+    base = os.path.dirname(os.path.abspath(__file__))
+    env_path = os.path.join(base, "local_userbot.env")
+    if not os.path.exists(env_path):
+        return
+    try:
+        with open(env_path, "r", encoding="utf-8-sig") as f:
+            for line in f:
+                s = (line or "").strip()
+                if not s or s.startswith("#"):
+                    continue
+                if "=" not in s:
+                    continue
+                k, v = s.split("=", 1)
+                k = (k or "").strip().lstrip("\ufeff")
+                if not k:
+                    continue
+                if os.getenv(k, "").strip():
+                    continue
+                os.environ[k] = (v or "").strip()
+    except Exception:
+        return
+
+
+_maybe_load_local_env()
+
+
 @dataclass
 class Settings:
     api_id: int
@@ -70,6 +99,15 @@ def _load_sessions() -> list[str]:
     raise SystemExit("missing LOCAL_USERBOT_SESSIONS_FILE or LOCAL_USERBOT_STRING_SESSIONS_JSON")
 
 
+def _bin_exists(path: str) -> bool:
+    p = (path or "").strip()
+    if not p:
+        return False
+    if os.path.isabs(p) or (os.sep in p) or ("/" in p):
+        return os.path.exists(p)
+    return shutil.which(p) is not None
+
+
 def load_settings() -> Settings:
     api_id = _env_int("LOCAL_USERBOT_API_ID", 0)
     api_hash = os.getenv("LOCAL_USERBOT_API_HASH", "").strip()
@@ -108,6 +146,8 @@ def load_settings() -> Settings:
         raise SystemExit("missing LOCAL_USERBOT_UPLOAD_CHANNEL_ID (or LOCAL_USERBOT_CHANNEL_ID)")
     if len(sessions) < 1:
         raise SystemExit("need at least 1 session")
+    if transcode_h264 and not _bin_exists(ffmpeg_bin):
+        raise SystemExit("LOCAL_USERBOT_TRANSCODE_H264=1 but ffmpeg not found. Set LOCAL_USERBOT_FFMPEG_BIN to full path.")
     return Settings(
         api_id=api_id,
         api_hash=api_hash,
@@ -170,8 +210,14 @@ class Notifier:
     async def init(self):
         if not self._monitor_chat:
             return
+        target = self._monitor_chat
         try:
-            self._entity = await self._client.get_entity(self._monitor_chat)
+            if isinstance(target, str) and target.strip() and (target.strip().lstrip("-").isdigit()):
+                target = int(target.strip())
+        except Exception:
+            target = self._monitor_chat
+        try:
+            self._entity = await self._client.get_entity(target)
         except Exception:
             self._entity = None
 

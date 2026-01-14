@@ -5,6 +5,7 @@ import random
 import subprocess
 import sys
 from datetime import datetime
+import time
 
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -24,6 +25,7 @@ from config import (
     USERBOT_NOTIFY_CHAT_ID,
     USERBOT_SESSION_NAME,
     USERBOT_STRING_SESSION,
+    PROJECT_ROOT,
 )
 from core.models import claim_clip_dispatch, mark_clip_dispatch_sent, unclaim_clip_dispatch
 
@@ -107,6 +109,22 @@ def _clip_video(src: str, dst: str, start: int, length: int) -> bool:
 
 def _state_path() -> str:
     return os.path.join("tmp", "userbot", "processed.json")
+
+
+def _heartbeat_path() -> str:
+    return os.path.join("tmp", "heartbeat_userbot.json")
+
+
+def _write_heartbeat():
+    try:
+        p = os.path.join(PROJECT_ROOT, _heartbeat_path())
+        os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"ts": int(time.time()), "iso": datetime.utcnow().isoformat(), "pid": os.getpid()}, f, ensure_ascii=False)
+        os.replace(tmp, p)
+    except Exception:
+        return
 
 
 def _load_state() -> set[int]:
@@ -265,6 +283,13 @@ async def main():
             client,
             f"<b>userbot 已启动</b>\nuser_id=<code>{me.id}</code>\n监听频道：<code>{PAID_CHANNEL_ID}</code>",
         )
+
+        async def _hb_loop():
+            while True:
+                _write_heartbeat()
+                await asyncio.sleep(60)
+
+        asyncio.create_task(_hb_loop())
 
         @client.on(events.Album(chats=PAID_CHANNEL_ID))
         async def on_new_album(event):
