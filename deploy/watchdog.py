@@ -459,7 +459,7 @@ def _systemd_check_and_fix(units: list[str], heartbeat_map: dict[str, str], proj
         _record_failure(st, key, reason)
         tail = _systemd_tail(unit)
         msg = f"[watchdog] {unit} unhealthy, restarting...\nreason={reason}"
-        if tail and _env("WATCHDOG_INCLUDE_LOGS_ON", "fail") in ("always", "pre"):
+        if tail and _env("WATCHDOG_INCLUDE_LOGS_ON", "fail") in ("always", "pre", "fail"):
             msg = msg + "\n\n" + tail
         _tg_send(msg[:3500])
         rc2, out2 = _run(["systemctl", "restart", unit])
@@ -528,7 +528,7 @@ def _docker_check_and_fix(compose_dir: str, services: list[str], heartbeat_map: 
                     continue
                 tail = _docker_tail(compose_dir, svc)
                 msg = f"[watchdog] docker service {svc} unhealthy, restarting...\n{reason}"
-                if tail and _env("WATCHDOG_INCLUDE_LOGS_ON", "fail") in ("always", "pre"):
+                if tail and _env("WATCHDOG_INCLUDE_LOGS_ON", "fail") in ("always", "pre", "fail"):
                     msg = msg + "\n\n" + tail
                 _tg_send(msg[:3500])
             else:
@@ -549,7 +549,7 @@ def _docker_check_and_fix(compose_dir: str, services: list[str], heartbeat_map: 
         _record_failure(st, key, "not running")
         tail = _docker_tail(compose_dir, svc)
         msg = f"[watchdog] docker service {svc} not running, restarting..."
-        if tail and _env("WATCHDOG_INCLUDE_LOGS_ON", "fail") in ("always", "pre"):
+        if tail and _env("WATCHDOG_INCLUDE_LOGS_ON", "fail") in ("always", "pre", "fail"):
             msg = msg + "\n\n" + tail
         _tg_send(msg[:3500])
         up_cmd = base + ["up", "-d", "--force-recreate"]
