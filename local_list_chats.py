@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+from telethon.utils import get_peer_id
 
 
 def _maybe_load_local_env():
@@ -69,9 +70,18 @@ async def main():
             ent = d.entity
             title = getattr(ent, "title", None) or getattr(ent, "first_name", None) or ""
             username = getattr(ent, "username", None) or ""
-            chat_id = int(getattr(ent, "id", 0) or 0)
+            raw_id = int(getattr(ent, "id", 0) or 0)
+            peer_id = int(get_peer_id(ent))
             kind = type(ent).__name__
-            rows.append({"id": chat_id, "title": str(title), "username": str(username), "type": str(kind)})
+            rows.append(
+                {
+                    "peer_id": peer_id,
+                    "raw_id": raw_id,
+                    "title": str(title),
+                    "username": str(username),
+                    "type": str(kind),
+                }
+            )
 
         with open(s.out_file, "w", encoding="utf-8") as f:
             json.dump({"count": len(rows), "chats": rows}, f, ensure_ascii=False, indent=2)
@@ -80,11 +90,12 @@ async def main():
             t = (r.get("title") or "").replace("\n", " ").strip()
             u = (r.get("username") or "").strip()
             tp = (r.get("type") or "").strip()
-            cid = r.get("id")
+            pid = r.get("peer_id")
+            rid = r.get("raw_id")
             if u:
-                print(f"{cid}\t{tp}\t{t}\t@{u}")
+                print(f"{pid}\t{rid}\t{tp}\t{t}\t@{u}")
             else:
-                print(f"{cid}\t{tp}\t{t}")
+                print(f"{pid}\t{rid}\t{tp}\t{t}")
 
 
 if __name__ == "__main__":

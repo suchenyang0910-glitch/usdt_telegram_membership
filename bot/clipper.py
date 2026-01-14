@@ -18,6 +18,7 @@ from config import (
     SEND_RETRY,
     FREE_CHANNEL_IDS,
     HIGHLIGHT_CHANNEL_ID,
+    PAID_CHANNEL_ID,
     MAX_TG_DOWNLOAD_MB,
 )
 from bot.captions import compose_free_caption
@@ -180,8 +181,10 @@ async def private_channel_video_handler(update: Update, context: ContextTypes.DE
     for ch in ([HIGHLIGHT_CHANNEL_ID] + list(FREE_CHANNEL_IDS)):
         if ch and ch not in targets:
             targets.append(ch)
+    logger.info("[clipper] targets=%s msg_id=%s", targets, getattr(message, "message_id", None))
 
     for ch in targets:
+        last_err = None
         for i in range(SEND_RETRY):
             try:
                 if not claim_clip_dispatch(PAID_CHANNEL_ID, int(message.message_id), int(ch), "bot"):
@@ -192,6 +195,7 @@ async def private_channel_video_handler(update: Update, context: ContextTypes.DE
                 mark_clip_dispatch_sent(PAID_CHANNEL_ID, int(message.message_id), int(ch))
                 break
             except Exception as e:
+                last_err = e
                 try:
                     unclaim_clip_dispatch(PAID_CHANNEL_ID, int(message.message_id), int(ch))
                 except Exception:
@@ -204,6 +208,20 @@ async def private_channel_video_handler(update: Update, context: ContextTypes.DE
                     exc_info=True,
                 )
                 time.sleep(1)
+        if last_err:
+            try:
+                await send_admin_text(
+                    context.bot,
+                    (
+                        "<b>剪辑发送失败</b>\n"
+                        f"目标频道：<code>{ch}</code>\n"
+                        f"来源消息ID：<code>{message.message_id}</code>\n"
+                        f"err=<code>{type(last_err).__name__}: {last_err}</code>"
+                    ),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
 
     # 清理临时文件
     try:

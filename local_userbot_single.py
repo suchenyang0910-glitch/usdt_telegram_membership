@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
@@ -267,14 +267,17 @@ def _state_save(path: str, data: dict):
 
 
 async def _scan_groups(client: TelegramClient, s: Settings) -> list[tuple[int, list]]:
-    since = datetime.utcnow() - timedelta(days=int(s.lookback_days))
+    since = datetime.now(timezone.utc) - timedelta(days=int(s.lookback_days))
     groups: dict[int, list] = {}
     async for m in client.iter_messages(s.download_channel_id, offset_date=None):
         if not m:
             continue
         dt = getattr(m, "date", None)
-        if dt and dt.replace(tzinfo=None) < since:
-            break
+        if dt:
+            if getattr(dt, "tzinfo", None) is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if dt < since:
+                break
         if not getattr(m, "file", None):
             continue
         key = int(getattr(m, "grouped_id", None) or int(m.id))
@@ -293,10 +296,12 @@ async def _download_group(client: TelegramClient, s: Settings, group_id: int, it
     if ids and all(mid in downloaded for mid in ids):
         return True
 
-    dt = getattr(items[0], "date", None) or datetime.utcnow()
+    dt = getattr(items[0], "date", None) or datetime.now(timezone.utc)
+    if getattr(dt, "tzinfo", None) is None:
+        dt = dt.replace(tzinfo=timezone.utc)
     base_dir = os.path.join(s.root, "downloads")
     _ensure_dir(base_dir)
-    folder = os.path.join(base_dir, _folder_name(dt.replace(tzinfo=None), int(group_id)))
+    folder = os.path.join(base_dir, _folder_name(dt, int(group_id)))
     _ensure_dir(folder)
 
     cap = ""
@@ -310,7 +315,7 @@ async def _download_group(client: TelegramClient, s: Settings, group_id: int, it
         "group_id": int(group_id),
         "download_channel_id": int(s.download_channel_id),
         "message_ids": ids,
-        "created_at_utc": datetime.utcnow().isoformat(),
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
     }
     _save_json(os.path.join(folder, "meta.json"), meta)
 
@@ -423,6 +428,10 @@ async def run_forever():
     client = TelegramClient(StringSession(s.string_session), s.api_id, s.api_hash)
 
     async with client:
+        print("local_userbot_single started")
+        print(f"download_channel_id={s.download_channel_id} upload_channel_id={s.upload_channel_id}")
+        print(f"lookback_days={s.lookback_days} poll_minutes={s.poll_minutes} download_concurrency={s.download_concurrency}")
+        print(f"root={s.root}")
         sem = asyncio.Semaphore(int(s.download_concurrency))
 
         async def download_tick():
@@ -448,12 +457,19 @@ async def run_forever():
 
         async def download_loop():
             while True:
+                print("download tick")
                 await download_tick()
                 await asyncio.sleep(float(s.poll_minutes) * 60.0)
 
         async def upload_loop():
             while True:
-                await asyncio.sleep(_next_half_hour_sleep())
+                sleep_s = float(_next_half_hour_sleep())
+                next_ts = datetime.now() + timedelta(seconds=int(sleep_s))
+                print(f"next upload at {next_ts.strftime('%Y-%m-%d %H:%M:%S')} (in {int(sleep_s)}s)")
+                try:
+                    await asyncio.sleep(sleep_s)
+                except asyncio.CancelledError:
+                    return
                 try:
                     await _upload_one_completed_folder(client, s)
                 except Exception:
@@ -463,5 +479,8 @@ async def run_forever():
 
 
 if __name__ == "__main__":
-    asyncio.run(run_forever())
+    try:
+        asyncio.run(run_forever())
+    except KeyboardInterrupt:
+        pass
 
