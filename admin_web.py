@@ -1,4 +1,6 @@
 import base64
+import csv
+import io
 import json
 import os
 import secrets
@@ -37,6 +39,15 @@ def _utc_now() -> datetime:
 
 def _json_bytes(obj) -> bytes:
     return json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8")
+
+
+def _csv_bytes(rows: list[dict], cols: list[str]) -> bytes:
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(cols)
+    for r in rows:
+        w.writerow([("" if r.get(c) is None else str(r.get(c))) for c in cols])
+    return buf.getvalue().encode("utf-8-sig")
 
 
 def _basic_auth_ok(headers) -> bool:
@@ -160,6 +171,7 @@ INDEX_HTML = """<!doctype html>
         <input id="bcBtnText" placeholder="button_text(可选)" style="min-width:200px" />
         <input id="bcBtnUrl" placeholder="button_url(可选)" style="min-width:320px" />
         <label class="muted"><input id="bcNoPreview" type="checkbox" /> 不显示预览</label>
+        <button onclick="previewBroadcast()">预览人数</button>
         <button onclick="createBroadcast()">创建</button>
         <button onclick="loadBroadcasts()">刷新</button>
       </div>
@@ -169,10 +181,20 @@ INDEX_HTML = """<!doctype html>
       <div class="row">
         <input id="bcJobId" placeholder="job_id 查看发送日志" style="min-width:200px" />
         <button onclick="loadBroadcastLogs()">查看日志</button>
+        <button onclick="pauseBroadcast()">暂停</button>
+        <button onclick="resumeBroadcast()">继续</button>
       </div>
       <div id="broadcastLogs"></div>
       <div id="broadcasts"></div>
     </div>
+  </div>
+
+  <h3>导出 CSV</h3>
+  <div class="row">
+    <button onclick="exportUsers()">导出用户</button>
+    <button onclick="exportOrders()">导出订单(7d)</button>
+    <button onclick="exportTxs()">导出入账(7d)</button>
+    <button onclick="exportAudit()">导出审计(7d)</button>
   </div>
 
   <h3>最近订单</h3>
@@ -323,6 +345,27 @@ async function loadBroadcastLogs(){
   document.getElementById("broadcastLogs").innerHTML = tableHtml(data.items||[]);
 }
 
+async function previewBroadcast(){
+  const seg = document.getElementById("bcSegment").value.trim();
+  const src = document.getElementById("bcSource").value.trim();
+  const data = await jget("/api/broadcast_preview?segment=" + encodeURIComponent(seg) + "&source=" + encodeURIComponent(src));
+  document.getElementById("opResult").innerText = "预览：目标人数=" + (data.count||0);
+}
+
+async function pauseBroadcast(){
+  const id = document.getElementById("bcJobId").value.trim();
+  if(!id){ return; }
+  await jpost("/api/broadcast_pause", {id: parseInt(id,10)});
+  await loadBroadcasts();
+}
+
+async function resumeBroadcast(){
+  const id = document.getElementById("bcJobId").value.trim();
+  if(!id){ return; }
+  await jpost("/api/broadcast_resume", {id: parseInt(id,10)});
+  await loadBroadcasts();
+}
+
 async function createBroadcast(){
   const body = {
     segment: document.getElementById("bcSegment").value.trim(),
@@ -336,6 +379,20 @@ async function createBroadcast(){
   const r = await jpost("/api/broadcast_create", body);
   await loadBroadcasts();
   if(r && r.id){ await jpost("/api/broadcast_run", {id: r.id}); await loadBroadcasts(); }
+}
+
+function exportUsers(){
+  const q = document.getElementById("q").value.trim();
+  window.location = "/api/export/users.csv?q=" + encodeURIComponent(q) + "&limit=2000";
+}
+function exportOrders(){
+  window.location = "/api/export/orders.csv?hours=168&limit=5000";
+}
+function exportTxs(){
+  window.location = "/api/export/txs.csv?hours=168&limit=5000";
+}
+function exportAudit(){
+  window.location = "/api/export/admin_audit.csv?hours=168&limit=5000";
 }
 
 async function loadOrders(){
@@ -361,6 +418,15 @@ class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, body: bytes, ctype: str):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_csv(self, filename: str, body: bytes):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -439,6 +505,59 @@ class Handler(BaseHTTPRequestHandler):
             limit = int((qs.get("limit", ["200"])[0] or "200"))
             body = _json_bytes({"items": list_broadcast_logs(job_id=job_id, limit=limit)})
             return self._send(200, body, "application/json; charset=utf-8")
+
+        if path == "/api/broadcast_preview":
+            qs = parse_qs(u.query)
+            segment = (qs.get("segment", [""])[0] or "").strip()
+            source = (qs.get("source", [""])[0] or "").strip()
+            targets = _pick_broadcast_targets(segment, source or None)
+            body = _json_bytes({"count": len(targets), "sample": targets[:10]})
+            return self._send(200, body, "application/json; charset=utf-8")
+
+        if path == "/api/export/users.csv":
+            qs = parse_qs(u.query)
+            q = (qs.get("q", [""])[0] or "").strip()
+            limit = int((qs.get("limit", ["2000"])[0] or "2000"))
+            rows = list_users(q=q, limit=limit)
+            cols = ["telegram_id", "username", "paid_until", "total_received", "wallet_addr", "first_source", "last_source", "last_source_at", "is_blacklisted", "is_whitelisted", "note", "created_at"]
+            body = _csv_bytes(rows, cols)
+            return self._send_csv("users.csv", body)
+
+        if path == "/api/export/orders.csv":
+            qs = parse_qs(u.query)
+            hours = int((qs.get("hours", ["168"])[0] or "168"))
+            limit = int((qs.get("limit", ["5000"])[0] or "5000"))
+            rows = list_orders(hours=hours, limit=limit)
+            cols = ["id", "telegram_id", "addr", "amount", "plan_code", "status", "tx_id", "created_at"]
+            body = _csv_bytes(rows, cols)
+            return self._send_csv("orders.csv", body)
+
+        if path == "/api/export/txs.csv":
+            qs = parse_qs(u.query)
+            hours = int((qs.get("hours", ["168"])[0] or "168"))
+            limit = int((qs.get("limit", ["5000"])[0] or "5000"))
+            rows = list_txs(hours=hours, limit=limit)
+            cols = ["tx_id", "telegram_id", "addr", "from_addr", "amount", "status", "plan_code", "credited_amount", "processed_at", "block_time", "created_at"]
+            body = _csv_bytes(rows, cols)
+            return self._send_csv("txs.csv", body)
+
+        if path == "/api/export/broadcast_logs.csv":
+            qs = parse_qs(u.query)
+            job_id = int((qs.get("job_id", ["0"])[0] or "0"))
+            limit = int((qs.get("limit", ["20000"])[0] or "20000"))
+            rows = list_broadcast_logs(job_id=job_id, limit=limit)
+            cols = ["telegram_id", "status", "error", "created_at"]
+            body = _csv_bytes(rows, cols)
+            return self._send_csv(f"broadcast_{job_id}.csv", body)
+
+        if path == "/api/export/admin_audit.csv":
+            qs = parse_qs(u.query)
+            hours = int((qs.get("hours", ["168"])[0] or "168"))
+            limit = int((qs.get("limit", ["5000"])[0] or "5000"))
+            rows = list_admin_audit(hours=hours, limit=limit)
+            cols = ["id", "actor", "action", "target_id", "payload", "created_at"]
+            body = _csv_bytes(rows, cols)
+            return self._send_csv("admin_audit.csv", body)
 
         self._send(404, b"not found", "text/plain; charset=utf-8")
 
@@ -519,6 +638,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/broadcast_run":
             bid = int(data.get("id") or 0)
             ok = run_broadcast_async(bid)
+            body = _json_bytes({"ok": ok})
+            return self._send(200, body, "application/json; charset=utf-8")
+
+        if path == "/api/broadcast_pause":
+            bid = int(data.get("id") or 0)
+            ok = broadcast_set_status(bid, "paused")
+            body = _json_bytes({"ok": ok})
+            return self._send(200, body, "application/json; charset=utf-8")
+
+        if path == "/api/broadcast_resume":
+            bid = int(data.get("id") or 0)
+            ok = broadcast_set_status(bid, "running")
+            if ok:
+                run_broadcast_async(bid)
             body = _json_bytes({"ok": ok})
             return self._send(200, body, "application/json; charset=utf-8")
 
@@ -638,6 +771,32 @@ def list_orders(hours: int, limit: int) -> list[dict]:
     sql = """
         SELECT id, telegram_id, addr, amount, plan_code, status, tx_id, created_at
         FROM orders
+        WHERE created_at >= (UTC_TIMESTAMP() - INTERVAL %s HOUR)
+        ORDER BY created_at DESC
+        LIMIT %s
+    """
+    return _q_all(sql, (hours, limit))
+
+
+def list_txs(hours: int, limit: int) -> list[dict]:
+    hours = max(1, min(int(hours), 720))
+    limit = max(1, min(int(limit), 20000))
+    sql = """
+        SELECT tx_id, telegram_id, addr, from_addr, amount, status, plan_code, credited_amount, processed_at, block_time, created_at
+        FROM usdt_txs
+        WHERE created_at >= (UTC_TIMESTAMP() - INTERVAL %s HOUR)
+        ORDER BY created_at DESC
+        LIMIT %s
+    """
+    return _q_all(sql, (hours, limit))
+
+
+def list_admin_audit(hours: int, limit: int) -> list[dict]:
+    hours = max(1, min(int(hours), 720))
+    limit = max(1, min(int(limit), 20000))
+    sql = """
+        SELECT id, actor, action, target_id, payload, created_at
+        FROM admin_audit
         WHERE created_at >= (UTC_TIMESTAMP() - INTERVAL %s HOUR)
         ORDER BY created_at DESC
         LIMIT %s
@@ -819,6 +978,17 @@ def list_broadcast_logs(job_id: int, limit: int) -> list[dict]:
     return _q_all(sql, (job_id, limit))
 
 
+def broadcast_set_status(job_id: int, status: str) -> bool:
+    job_id = int(job_id or 0)
+    status = (status or "").strip()
+    if job_id <= 0:
+        return False
+    if status not in ("paused", "running", "aborted", "done", "created"):
+        return False
+    _exec("UPDATE broadcast_jobs SET status=%s WHERE id=%s", (status, job_id))
+    return True
+
+
 _broadcast_lock = threading.Lock()
 _broadcast_running: set[int] = set()
 
@@ -875,6 +1045,8 @@ def _run_broadcast(job_id: int):
     if not row:
         return
     job = row[0]
+    if (job.get("status") or "") in ("paused", "aborted", "done"):
+        return
     segment = job.get("segment") or "all"
     source = job.get("source")
     text = job.get("text") or ""
@@ -883,10 +1055,22 @@ def _run_broadcast(job_id: int):
     button_url = (job.get("button_url") or "").strip() or None
     disable_preview = int(job.get("disable_preview") or 0) == 1
     targets = _pick_broadcast_targets(segment, source)
-    _broadcast_update(job_id, status="running", started_at=_utc_now(), total=len(targets), success=0, failed=0)
+    done_rows = _q_all("SELECT telegram_id FROM broadcast_logs WHERE job_id=%s", (int(job_id),))
+    done = set()
+    for r in done_rows:
+        try:
+            done.add(int(r.get("telegram_id")))
+        except Exception:
+            continue
+    targets = [x for x in targets if int(x) not in done]
+    _broadcast_update(job_id, status="running", started_at=_utc_now(), total=len(targets))
     ok_n = 0
     fail_n = 0
     for uid in targets:
+        srow = _q_one("SELECT status FROM broadcast_jobs WHERE id=%s", (int(job_id),))
+        if srow in ("paused", "aborted", "done"):
+            _broadcast_update(job_id, status=str(srow))
+            return
         payload = {"chat_id": str(uid), "text": text}
         if parse_mode:
             payload["parse_mode"] = parse_mode
