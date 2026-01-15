@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Mini 视频App - 详情 UI</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="./_base.css" />
+  <style>
+    .mv-bar{background:color-mix(in srgb,var(--mv-surface-2) 92%,transparent);backdrop-filter:blur(16px);border:1px solid rgba(148,163,184,.16)}
+    .mv-pill{border-radius:9999px}
+  </style>
+</head>
+<body class="mv-safe-bottom">
+  <div class="mv-wrap px-3">
+    <div class="pt-3 flex items-center gap-2">
+      <button class="w-9 h-9 rounded-xl flex items-center justify-center mv-btn-ghost">←</button>
+      <div class="text-sm font-extrabold">视频详情</div>
+      <div class="ml-auto mv-pill px-2.5 py-1 text-[11px] mv-muted" style="background:rgba(148,163,184,.16)">Free</div>
+    </div>
+
+    <div class="mt-3 mv-card overflow-hidden">
+      <div class="relative">
+        <div class="aspect-video bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
+          <div class="w-16 h-16 rounded-full bg-black/40 flex items-center justify-center">
+            <span class="text-white text-3xl">▶</span>
+          </div>
+        </div>
+        <div class="absolute inset-0 bg-black/45 backdrop-blur-[1px] flex items-center justify-center">
+          <div class="mv-pill px-3 py-1.5 bg-black/60 text-white text-xs font-extrabold flex items-center gap-2">
+            <span class="inline-flex w-5 h-5 items-center justify-center rounded-full bg-white/10">🔒</span>
+            <span>观看完整版需 VIP</span>
+          </div>
+        </div>
+        <div class="absolute bottom-2 right-2 mv-pill bg-black/70 text-white text-[11px] px-2 py-0.5">24:15</div>
+      </div>
+      <div class="p-4">
+        <div class="text-base font-extrabold leading-snug">极品模特私房拍摄花絮完整版 - 4K</div>
+        <div class="mt-2 flex items-center gap-2 text-[11px] mv-muted">
+          <span class="inline-flex items-center gap-1">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+            12.5k
+          </span>
+          <span>·</span>
+          <span>上传：10分钟前</span>
+          <span>·</span>
+          <span class="mv-pill px-2 py-0.5" style="background:rgba(148,163,184,.16)">国产精选</span>
+        </div>
+        <div class="mt-3 flex flex-wrap gap-2">
+          <span class="mv-pill px-3 py-1 text-[11px]" style="background:rgba(148,163,184,.16)">#剧情</span>
+          <span class="mv-pill px-3 py-1 text-[11px]" style="background:rgba(148,163,184,.16)">#4K</span>
+          <span class="mv-pill px-3 py-1 text-[11px]" style="background:rgba(148,163,184,.16)">#室内</span>
+          <span class="mv-pill px-3 py-1 text-[11px]" style="background:rgba(148,163,184,.16)">#模特</span>
+        </div>
+        <div class="mt-4 text-sm mv-muted leading-relaxed">
+          这里展示视频简介与亮点信息。非会员点击播放会跳转免费频道预览（若存在），否则引导升级 VIP。
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-4 text-sm font-extrabold">你可能喜欢</div>
+    <div class="mt-3 grid grid-cols-2 gap-3">
+      <div class="mv-card overflow-hidden">
+        <div class="aspect-video bg-gray-200 dark:bg-gray-700"></div>
+        <div class="p-3">
+          <div class="text-xs font-extrabold line-clamp-2">热门合集：精彩片段</div>
+          <div class="mt-1 text-[11px] mv-muted">3.2k views</div>
+        </div>
+      </div>
+      <div class="mv-card overflow-hidden">
+        <div class="aspect-video bg-gray-200 dark:bg-gray-700"></div>
+        <div class="p-3">
+          <div class="text-xs font-extrabold line-clamp-2">独家首播：高清完整版</div>
+          <div class="mt-1 text-[11px] mv-muted">9.1k views</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="fixed bottom-0 left-0 right-0 z-40">
+    <div class="mv-wrap px-3">
+      <div class="mv-bar rounded-2xl mb-3 px-3 py-3 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-full flex items-center justify-center text-sm font-extrabold text-white" style="background:linear-gradient(135deg,#60a5fa,#2563eb)">Y</div>
+          <div>
+            <div class="text-sm font-extrabold leading-tight">解锁完整版</div>
+            <div class="text-[11px] mv-muted mt-0.5">加入 VIP 后可观看所有付费视频</div>
+          </div>
+        </div>
+        <button class="mv-btn mv-btn-primary px-4 py-2 text-xs active:scale-95 transition-transform">⚡️ 升级 VIP</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

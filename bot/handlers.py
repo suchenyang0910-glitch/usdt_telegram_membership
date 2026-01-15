@@ -25,6 +25,7 @@ from config import (
     PAYMENT_SUFFIX_MAX,
     JOIN_REQUEST_ENABLE,
     JOIN_REQUEST_LINK_EXPIRE_HOURS,
+    WEBAPP_URL,
 )
 from core.models import (
     get_user,
@@ -53,29 +54,36 @@ def _is_admin(user_id: int) -> bool:
     return bool(ADMIN_USER_IDS) and user_id in ADMIN_USER_IDS
 
 def _main_menu_kb(lang: str) -> InlineKeyboardMarkup:
-    if lang == "zh":
-        return InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("⚡️ 月费 1.99", callback_data="pay_monthly"),
-                    InlineKeyboardButton("⚡️ 季度 3.99", callback_data="pay_quarter"),
-                    InlineKeyboardButton("⚡️ 年费 15.99", callback_data="pay_yearly"),
-                ],
-                [InlineKeyboardButton("📅 我的会员", callback_data="menu_status")],
-                [InlineKeyboardButton("🎁 邀请赚钱", callback_data="menu_invite")],
-            ]
-        )
-    return InlineKeyboardMarkup(
+    btns = [
         [
-            [
-                InlineKeyboardButton("Monthly 1.99", callback_data="pay_monthly"),
-                InlineKeyboardButton("Quarter 3.99", callback_data="pay_quarter"),
-                InlineKeyboardButton("Yearly 15.99", callback_data="pay_yearly"),
-            ],
-            [InlineKeyboardButton("📅 My Membership", callback_data="menu_status")],
-            [InlineKeyboardButton("🎁 Invite", callback_data="menu_invite")],
-        ]
-    )
+            InlineKeyboardButton("⚡️ 月费 1.99", callback_data="pay_monthly"),
+            InlineKeyboardButton("⚡️ 季度 3.99", callback_data="pay_quarter"),
+            InlineKeyboardButton("⚡️ 年费 15.99", callback_data="pay_yearly"),
+        ],
+        [InlineKeyboardButton("📅 我的会员", callback_data="menu_status")],
+        [InlineKeyboardButton("🎁 邀请赚钱", callback_data="menu_invite")],
+    ]
+    if WEBAPP_URL:
+        search_btn = InlineKeyboardButton("🔍 搜索视频", web_app=WebAppInfo(url=WEBAPP_URL))
+        btns.insert(1, [search_btn])
+
+    if lang == "zh":
+        return InlineKeyboardMarkup(btns)
+
+    # English menu
+    btns_en = [
+        [
+            InlineKeyboardButton("Monthly 1.99", callback_data="pay_monthly"),
+            InlineKeyboardButton("Quarter 3.99", callback_data="pay_quarter"),
+            InlineKeyboardButton("Yearly 15.99", callback_data="pay_yearly"),
+        ],
+        [InlineKeyboardButton("📅 My Membership", callback_data="menu_status")],
+        [InlineKeyboardButton("🎁 Invite", callback_data="menu_invite")],
+    ]
+    if WEBAPP_URL:
+        search_btn = InlineKeyboardButton("🔍 Search Videos", web_app=WebAppInfo(url=WEBAPP_URL))
+        btns_en.insert(1, [search_btn])
+    return InlineKeyboardMarkup(btns_en)
 
 
 def _plans_kb(lang: str) -> InlineKeyboardMarkup:

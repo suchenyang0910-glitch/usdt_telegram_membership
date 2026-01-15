@@ -25,8 +25,8 @@ class FakeClient:
         self.bytes_per_tick = int(bytes_per_tick)
 
     async def download_media(self, msg, file: str, progress_callback=None):
-        os.makedirs(file, exist_ok=True)
-        dst = os.path.join(file, f"{msg.id}.bin")
+        os.makedirs(os.path.dirname(file) or ".", exist_ok=True)
+        dst = file
         total = int(getattr(getattr(msg, "file", None), "size", None) or 0)
         cur = 0
         with open(dst, "wb") as f:
@@ -45,10 +45,11 @@ async def main():
         client = FakeClient(bytes_per_tick=256 * 1024)
         msg = FakeMsg(1, 5 * 1024 * 1024)
         started = time.time()
+        out = os.path.join(td, "1.bin")
         fp = await _download_media_with_timeouts(
             client,
             msg,
-            td,
+            out,
             base_timeout_sec=0,
             stall_timeout_sec=0,
             min_kbps=128,
@@ -57,6 +58,7 @@ async def main():
         assert fp and os.path.exists(fp)
         assert os.path.getsize(fp) == msg.file.size
         assert time.time() - started < 10
+        print("OK")
 
 
 if __name__ == "__main__":

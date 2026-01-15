@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Mini 视频App - 首页 UI</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="./_base.css" />
+  <style>
+    .mv-search{background:var(--mv-surface-2);border-radius:16px}
+    .mv-sticky{background:color-mix(in srgb,var(--mv-surface-1) 94%,transparent)}
+    .mv-poster{border-radius:16px}
+    .mv-badge{border-radius:9999px}
+  </style>
+</head>
+<body class="mv-safe-bottom">
+  <div class="mv-wrap px-3">
+    <div class="pt-3">
+      <div class="mv-topline w-full"></div>
+    </div>
+
+    <div class="sticky top-0 z-30 pt-3 pb-2 mv-sticky backdrop-blur-md">
+      <div class="mv-search flex items-center gap-2 px-3 py-2.5">
+        <svg class="w-4 h-4 mv-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+        <input disabled class="w-full bg-transparent text-sm outline-none placeholder:mv-muted" placeholder="搜索视频 / 标签 / 模特" />
+        <span class="text-[11px] mv-muted">⌘K</span>
+      </div>
+    </div>
+
+    <div class="mt-2">
+      <div class="flex gap-3 overflow-x-auto mv-hide-scrollbar snap-x snap-mandatory">
+        <div class="snap-center shrink-0 w-[92%] rounded-2xl overflow-hidden shadow-[0_18px_44px_rgba(59,130,246,.22)]">
+          <div class="aspect-[21/9] bg-gradient-to-r from-blue-500 to-indigo-500 p-4 flex items-end">
+            <div class="text-white">
+              <div class="text-sm font-extrabold tracking-wide">VIP 限时特惠</div>
+              <div class="text-[12px] opacity-90 mt-1">新会员立减 / 赠送 3 天</div>
+              <div class="mt-3 inline-flex items-center gap-2 bg-white/20 px-3 py-1.5 rounded-xl backdrop-blur-md">
+                <span class="text-xs font-bold">立即升级</span>
+                <span class="text-xs">→</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="snap-center shrink-0 w-[92%] rounded-2xl overflow-hidden shadow-[0_18px_44px_rgba(236,72,153,.18)]">
+          <div class="aspect-[21/9] bg-gradient-to-r from-fuchsia-500 to-pink-500 p-4 flex items-end">
+            <div class="text-white">
+              <div class="text-sm font-extrabold tracking-wide">本周热门合集</div>
+              <div class="text-[12px] opacity-90 mt-1">浏览量 TOP 50</div>
+              <div class="mt-3 inline-flex items-center gap-2 bg-white/20 px-3 py-1.5 rounded-xl backdrop-blur-md">
+                <span class="text-xs font-bold">查看榜单</span>
+                <span class="text-xs">→</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-3">
+      <div class="flex gap-2 overflow-x-auto mv-hide-scrollbar py-1">
+        <button class="mv-chip px-4 py-1.5 text-xs font-bold text-white" style="background:var(--mv-primary)">全部</button>
+        <button class="mv-chip px-4 py-1.5 text-xs font-semibold" style="background:var(--mv-surface-2)">国产精选</button>
+        <button class="mv-chip px-4 py-1.5 text-xs font-semibold" style="background:var(--mv-surface-2)">日韩专区</button>
+        <button class="mv-chip px-4 py-1.5 text-xs font-semibold" style="background:var(--mv-surface-2)">欧美极品</button>
+        <button class="mv-chip px-4 py-1.5 text-xs font-semibold" style="background:var(--mv-surface-2)">动漫</button>
+        <button class="mv-chip px-4 py-1.5 text-xs font-semibold" style="background:var(--mv-surface-2)">剧情</button>
+      </div>
+    </div>
+
+    <div class="mt-4 flex items-center justify-between">
+      <div class="flex items-center gap-4 text-sm">
+        <button class="font-extrabold" style="color:var(--mv-primary)">最新</button>
+        <button class="font-semibold mv-muted">热门</button>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-[11px] mv-muted">仅显示有预览</span>
+        <div class="w-10 h-6 rounded-full bg-gray-200 dark:bg-gray-700 relative">
+          <div class="w-5 h-5 rounded-full bg-white absolute top-0.5 left-0.5 shadow"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-4 grid grid-cols-1 gap-4">
+      <div class="mv-card overflow-hidden">
+        <div class="relative">
+          <div class="aspect-video bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
+            <div class="w-14 h-14 rounded-full bg-black/40 flex items-center justify-center">
+              <span class="text-white text-2xl">▶</span>
+            </div>
+          </div>
+          <div class="absolute inset-0 bg-black/45 backdrop-blur-[1px] flex items-center justify-center">
+            <div class="mv-badge px-3 py-1.5 bg-black/60 text-white text-xs font-extrabold flex items-center gap-2">
+              <span class="inline-flex w-5 h-5 items-center justify-center rounded-full bg-white/10">🔒</span>
+              <span>VIP 专享</span>
+            </div>
+          </div>
+          <div class="absolute bottom-2 right-2 mv-badge bg-black/70 text-white text-[11px] px-2 py-0.5">24:15</div>
+          <div class="absolute top-2 left-2 mv-badge bg-red-500 text-white text-[11px] font-extrabold px-2 py-0.5">HOT</div>
+        </div>
+        <div class="p-3.5">
+          <div class="text-sm font-extrabold leading-snug line-clamp-2">[VIP] 极品模特私房拍摄花絮完整版 - 4K</div>
+          <div class="mt-2 flex items-center justify-between text-[11px] mv-muted">
+            <div class="flex items-center gap-2">
+              <span class="inline-flex items-center gap-1">
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                12.5k
+              </span>
+              <span>·</span>
+              <span>预览可看</span>
+            </div>
+            <span>10分钟前</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="mv-card overflow-hidden">
+        <div class="relative">
+          <div class="aspect-video bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
+            <div class="w-14 h-14 rounded-full bg-black/40 flex items-center justify-center">
+              <span class="text-white text-2xl">▶</span>
+            </div>
+          </div>
+          <div class="absolute bottom-2 right-2 mv-badge bg-black/70 text-white text-[11px] px-2 py-0.5">00:45</div>
+        </div>
+        <div class="p-3.5">
+          <div class="text-sm font-extrabold leading-snug line-clamp-2">街头采访路人精彩片段（免费试看）</div>
+          <div class="mt-2 flex items-center justify-between text-[11px] mv-muted">
+            <div class="flex items-center gap-2">
+              <span class="inline-flex items-center gap-1">
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                3.2k
+              </span>
+              <span>·</span>
+              <span class="inline-flex items-center gap-1">
+                <span class="w-2 h-2 rounded-full bg-green-500"></span>
+                免费
+              </span>
+            </div>
+            <span>1小时前</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="mv-card overflow-hidden">
+        <div class="relative">
+          <div class="aspect-video bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
+            <div class="w-14 h-14 rounded-full bg-black/40 flex items-center justify-center">
+              <span class="text-white text-2xl">▶</span>
+            </div>
+          </div>
+          <div class="absolute bottom-2 right-2 mv-badge bg-black/70 text-white text-[11px] px-2 py-0.5">15:30</div>
+        </div>
+        <div class="p-3.5">
+          <div class="text-sm font-extrabold leading-snug line-clamp-2">日常 Vlog 更新：我的周末生活</div>
+          <div class="mt-2 flex items-center justify-between text-[11px] mv-muted">
+            <div class="flex items-center gap-2">
+              <span class="inline-flex items-center gap-1">
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                856
+              </span>
+            </div>
+            <span>2小时前</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="fixed bottom-0 left-0 right-0 z-40">
+    <div class="mv-wrap px-3">
+      <div class="rounded-2xl mb-3 px-3 py-3 flex items-center justify-between" style="background:color-mix(in srgb,var(--mv-surface-2) 94%,transparent);backdrop-filter:blur(14px);border:1px solid rgba(148,163,184,.16)">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-full flex items-center justify-center text-sm font-extrabold text-white" style="background:linear-gradient(135deg,#60a5fa,#2563eb)">Y</div>
+          <div>
+            <div class="text-sm font-extrabold leading-tight">yang Pvvideo</div>
+            <div class="mt-0.5 inline-flex items-center gap-2">
+              <span class="text-[11px] px-2 py-0.5 rounded-full mv-muted" style="background:rgba(148,163,184,.16)">Free</span>
+              <span class="text-[11px] mv-muted">升级后看完整视频</span>
+            </div>
+          </div>
+        </div>
+        <button class="mv-btn mv-btn-primary px-4 py-2 text-xs active:scale-95 transition-transform">⚡️ 升级 VIP</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

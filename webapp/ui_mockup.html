@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Mini 视频App UI 设计稿</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root {
+            --tg-theme-bg-color: #ffffff;
+            --tg-theme-text-color: #000000;
+            --tg-theme-hint-color: #999999;
+            --tg-theme-link-color: #2481cc;
+            --tg-theme-button-color: #3b82f6;
+            --tg-theme-button-text-color: #ffffff;
+            --tg-theme-secondary-bg-color: #f3f4f6;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --tg-theme-bg-color: #17212b;
+                --tg-theme-text-color: #f5f5f5;
+                --tg-theme-hint-color: #aaaaaa;
+                --tg-theme-link-color: #62bcf9;
+                --tg-theme-button-color: #2b5278;
+                --tg-theme-button-text-color: #ffffff;
+                --tg-theme-secondary-bg-color: #0e1621;
+            }
+        }
+
+        body { 
+            background-color: var(--tg-theme-bg-color); 
+            color: var(--tg-theme-text-color); 
+            -webkit-tap-highlight-color: transparent;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+        .card { background-color: var(--tg-theme-secondary-bg-color); }
+        .btn-primary { 
+            background-color: var(--tg-theme-button-color); 
+            color: var(--tg-theme-button-text-color); 
+        }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .chip { border-radius: 9999px; }
+        .muted { color: var(--tg-theme-hint-color); }
+    </style>
+</head>
+<body class="pb-24">
+    <div id="app" class="max-w-md mx-auto relative min-h-screen border-x border-gray-100 dark:border-gray-800">
+        <div class="h-1 bg-blue-500 w-full"></div>
+
+        <div class="sticky top-0 z-20 bg-[var(--tg-theme-bg-color)] p-3 shadow-sm transition-colors">
+            <div class="relative">
+                <input type="text" placeholder="🔍 搜索视频..." disabled
+                    class="w-full p-2.5 pl-10 rounded-xl border-none bg-[var(--tg-theme-secondary-bg-color)] text-sm focus:outline-none placeholder-[var(--tg-theme-hint-color)]">
+                <svg class="w-4 h-4 absolute left-3.5 top-3 text-[var(--tg-theme-hint-color)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+            </div>
+        </div>
+
+        <div class="p-3 pt-2">
+            <div class="overflow-x-auto hide-scrollbar flex gap-3 snap-x snap-mandatory">
+                <div class="snap-center shrink-0 w-[90%] relative rounded-xl overflow-hidden aspect-[21/9] bg-gradient-to-r from-blue-400 to-indigo-500 flex items-center justify-center text-white font-bold shadow-sm">
+                    <div class="text-center">
+                        <div class="text-xl">🔥 周末狂欢</div>
+                        <div class="text-xs opacity-80">全场会员 8 折优惠</div>
+                    </div>
+                </div>
+                <div class="snap-center shrink-0 w-[90%] relative rounded-xl overflow-hidden aspect-[21/9] bg-gradient-to-r from-purple-400 to-pink-500 flex items-center justify-center text-white font-bold shadow-sm">
+                    <div class="text-center">
+                        <div class="text-xl">🎬 独家首播</div>
+                        <div class="text-xs opacity-80">点击查看详情</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="px-3 mb-2 sticky top-[60px] z-10 bg-[var(--tg-theme-bg-color)] py-2 transition-colors">
+            <div class="flex gap-2 overflow-x-auto hide-scrollbar">
+                <button class="px-4 py-1.5 chip text-xs font-medium whitespace-nowrap bg-blue-500 text-white shadow-md shadow-blue-500/30">全部</button>
+                <button class="px-4 py-1.5 chip text-xs font-medium whitespace-nowrap bg-[var(--tg-theme-secondary-bg-color)]">国产精选</button>
+                <button class="px-4 py-1.5 chip text-xs font-medium whitespace-nowrap bg-[var(--tg-theme-secondary-bg-color)]">日韩专区</button>
+                <button class="px-4 py-1.5 chip text-xs font-medium whitespace-nowrap bg-[var(--tg-theme-secondary-bg-color)]">欧美极品</button>
+                <button class="px-4 py-1.5 chip text-xs font-medium whitespace-nowrap bg-[var(--tg-theme-secondary-bg-color)]">动漫</button>
+            </div>
+        </div>
+
+        <div class="px-4 mb-4 flex gap-6 text-sm border-b border-gray-100 dark:border-gray-800">
+            <button class="pb-2 font-bold text-blue-500 border-b-2 border-blue-500">最新上传</button>
+            <button class="pb-2 font-medium text-[var(--tg-theme-hint-color)]">热门榜单</button>
+        </div>
+
+        <div class="px-3 grid grid-cols-1 gap-5">
+            <div class="card rounded-2xl overflow-hidden shadow-sm relative group cursor-pointer">
+                <div class="relative aspect-video bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
+                    <span class="text-5xl opacity-30">▶️</span>
+                    <div class="absolute inset-0 bg-black/40 flex items-center justify-center backdrop-blur-[2px]">
+                        <div class="bg-black/60 text-white px-3 py-1.5 rounded-full flex items-center gap-1.5 backdrop-blur-md border border-white/10">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+                            <span class="text-xs font-bold">VIP 专享</span>
+                        </div>
+                    </div>
+                    <span class="absolute bottom-2 right-2 bg-black/70 text-white text-[10px] px-1.5 rounded">24:15</span>
+                </div>
+                <div class="p-3.5">
+                    <div class="text-sm font-semibold line-clamp-2 leading-snug mb-2">[VIP] 极品模特私房拍摄花絮完整版 - 4K画质</div>
+                    <div class="flex justify-between items-center text-[11px] muted">
+                        <div class="flex items-center gap-1">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                            <span>12.5k</span>
+                        </div>
+                        <span>10分钟前</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card rounded-2xl overflow-hidden shadow-sm relative group cursor-pointer">
+                <div class="relative aspect-video bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
+                    <span class="text-5xl opacity-30">▶️</span>
+                    <span class="absolute top-2 left-2 bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded shadow-sm">HOT</span>
+                    <span class="absolute bottom-2 right-2 bg-black/70 text-white text-[10px] px-1.5 rounded">00:45</span>
+                </div>
+                <div class="p-3.5">
+                    <div class="text-sm font-semibold line-clamp-2 leading-snug mb-2">街头采访路人精彩片段（免费试看）</div>
+                    <div class="flex justify-between items-center text-[11px] muted">
+                        <div class="flex items-center gap-1">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                            <span>3.2k</span>
+                        </div>
+                        <span>1小时前</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card rounded-2xl overflow-hidden shadow-sm relative group cursor-pointer">
+                <div class="relative aspect-video bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
+                    <span class="text-5xl opacity-30">▶️</span>
+                    <span class="absolute bottom-2 right-2 bg-black/70 text-white text-[10px] px-1.5 rounded">15:30</span>
+                </div>
+                <div class="p-3.5">
+                    <div class="text-sm font-semibold line-clamp-2 leading-snug mb-2">日常 Vlog 更新：我的周末生活</div>
+                    <div class="flex justify-between items-center text-[11px] muted">
+                        <div class="flex items-center gap-1">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                            <span>856</span>
+                        </div>
+                        <span>2小时前</span>
+                    </div>
+                </div>
+            </div>
+            
+        </div>
+
+        <div class="fixed bottom-0 left-0 right-0 bg-[var(--tg-theme-secondary-bg-color)] border-t border-gray-200 dark:border-gray-800 p-3 flex justify-between items-center z-30 max-w-md mx-auto backdrop-blur-md bg-opacity-95">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-sm font-bold text-white shadow-sm ring-2 ring-white dark:ring-gray-800">
+                    S
+                </div>
+                <div class="flex flex-col">
+                    <span class="text-sm font-bold truncate w-24">Scott</span>
+                    <div class="flex items-center gap-1">
+                        <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700 muted">Free User</span>
+                    </div>
+                </div>
+            </div>
+            <button class="btn-primary px-5 py-2.5 rounded-xl text-xs font-bold shadow-lg shadow-blue-500/30 transform active:scale-95 transition-transform flex items-center gap-1">
+                <span>⚡️</span>
+                <span>升级 VIP</span>
+            </button>
+        </div>
+
+    </div>
+</body>
+</html>

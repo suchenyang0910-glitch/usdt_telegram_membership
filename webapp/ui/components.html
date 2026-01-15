@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Mini 视频App - 组件库 UI</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="./_base.css" />
+</head>
+<body>
+  <div class="mv-wrap px-4 py-5">
+    <div class="text-lg font-extrabold">UI 组件库</div>
+    <div class="text-sm mv-muted mt-1">用于设计对齐与前端实现对照</div>
+
+    <div class="mt-6">
+      <div class="text-sm font-extrabold">颜色</div>
+      <div class="mt-3 grid grid-cols-2 gap-3">
+        <div class="mv-card p-3">
+          <div class="text-[11px] mv-muted">Primary</div>
+          <div class="mt-2 h-10 rounded-xl" style="background:var(--mv-primary)"></div>
+          <div class="mt-2 text-xs font-bold">--mv-primary</div>
+        </div>
+        <div class="mv-card p-3">
+          <div class="text-[11px] mv-muted">Danger</div>
+          <div class="mt-2 h-10 rounded-xl" style="background:var(--mv-danger)"></div>
+          <div class="mt-2 text-xs font-bold">--mv-danger</div>
+        </div>
+        <div class="mv-card p-3">
+          <div class="text-[11px] mv-muted">Surface</div>
+          <div class="mt-2 h-10 rounded-xl" style="background:var(--mv-surface-2)"></div>
+          <div class="mt-2 text-xs font-bold">--mv-surface-2</div>
+        </div>
+        <div class="mv-card p-3">
+          <div class="text-[11px] mv-muted">Text</div>
+          <div class="mt-2 h-10 rounded-xl flex items-center px-3" style="background:rgba(148,163,184,.16)">
+            <span class="font-extrabold" style="color:var(--mv-text-1)">Aa</span>
+            <span class="ml-2 mv-muted font-bold">Aa</span>
+          </div>
+          <div class="mt-2 text-xs font-bold">--mv-text-1/2</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-7">
+      <div class="text-sm font-extrabold">按钮</div>
+      <div class="mt-3 grid grid-cols-1 gap-3">
+        <button class="mv-btn mv-btn-primary w-full py-3 text-sm active:scale-95 transition-transform">Primary Button</button>
+        <button class="mv-btn w-full py-3 text-sm mv-btn-ghost active:scale-95 transition-transform">Ghost Button</button>
+        <button class="mv-btn w-full py-3 text-sm mv-muted" style="background:rgba(148,163,184,.16)">Secondary Button</button>
+      </div>
+    </div>
+
+    <div class="mt-7">
+      <div class="text-sm font-extrabold">Chip / Tag</div>
+      <div class="mt-3 flex flex-wrap gap-2">
+        <span class="mv-chip px-3 py-1.5 text-xs font-bold text-white" style="background:var(--mv-primary)">选中</span>
+        <span class="mv-chip px-3 py-1.5 text-xs font-semibold" style="background:var(--mv-surface-2)">默认</span>
+        <span class="mv-chip px-3 py-1.5 text-xs font-extrabold text-white" style="background:var(--mv-danger)">HOT</span>
+        <span class="mv-chip px-3 py-1.5 text-xs font-extrabold text-white" style="background:var(--mv-success)">FREE</span>
+        <span class="mv-chip px-3 py-1.5 text-xs font-extrabold text-white" style="background:#111">VIP</span>
+      </div>
+    </div>
+
+    <div class="mt-7">
+      <div class="text-sm font-extrabold">视频卡片状态</div>
+      <div class="mt-3 grid grid-cols-1 gap-4">
+        <div class="mv-card overflow-hidden">
+          <div class="relative">
+            <div class="aspect-video bg-gray-200 dark:bg-gray-700"></div>
+            <div class="absolute bottom-2 right-2 rounded-full bg-black/70 text-white text-[11px] px-2 py-0.5">00:45</div>
+            <div class="absolute top-2 left-2 rounded-full bg-green-500 text-white text-[11px] font-extrabold px-2 py-0.5">FREE</div>
+          </div>
+          <div class="p-3.5">
+            <div class="text-sm font-extrabold line-clamp-2">免费试看视频标题</div>
+            <div class="mt-2 text-[11px] mv-muted">3.2k views · 1小时前</div>
+          </div>
+        </div>
+
+        <div class="mv-card overflow-hidden">
+          <div class="relative">
+            <div class="aspect-video bg-gray-200 dark:bg-gray-700"></div>
+            <div class="absolute inset-0 bg-black/45 flex items-center justify-center">
+              <div class="rounded-full bg-black/60 text-white px-3 py-1.5 text-xs font-extrabold flex items-center gap-2">
+                <span class="w-5 h-5 rounded-full bg-white/10 inline-flex items-center justify-center">🔒</span>
+                VIP 专享
+              </div>
+            </div>
+            <div class="absolute bottom-2 right-2 rounded-full bg-black/70 text-white text-[11px] px-2 py-0.5">24:15</div>
+          </div>
+          <div class="p-3.5">
+            <div class="text-sm font-extrabold line-clamp-2">VIP 视频标题（锁定）</div>
+            <div class="mt-2 text-[11px] mv-muted">12.5k views · 10分钟前</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

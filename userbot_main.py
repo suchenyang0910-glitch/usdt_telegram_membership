@@ -27,7 +27,7 @@ from config import (
     USERBOT_SESSION_NAME,
     USERBOT_STRING_SESSION,
 )
-from core.models import claim_clip_dispatch_takeover, mark_clip_dispatch_sent, unclaim_clip_dispatch
+from core.models import claim_clip_dispatch_takeover, mark_clip_dispatch_sent, unclaim_clip_dispatch, update_video_free_link
 
 
 def _targets() -> list[int]:
@@ -238,8 +238,14 @@ async def _process_video_message(client: TelegramClient, msg, caption_src: str):
                     f"<b>跳过发送</b>\nmsg_id=<code>{msg.id}</code>\ntarget=<code>{ch}</code>\n原因：已发送或仍在发送中",
                 )
                 continue
-            await client.send_file(ch, dst, caption=caption, supports_streaming=True)
+            sent_msg = await client.send_file(ch, dst, caption=caption, supports_streaming=True)
             mark_clip_dispatch_sent(PAID_CHANNEL_ID, int(msg.id), int(ch))
+            
+            try:
+                update_video_free_link(PAID_CHANNEL_ID, int(msg.id), int(ch), int(sent_msg.id))
+            except Exception:
+                pass
+            
             sent += 1
         except Exception as e:
             try:

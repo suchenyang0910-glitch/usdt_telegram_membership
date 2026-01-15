@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-from telethon.errors import FileReferenceExpiredError
+from telethon.errors import FileReferenceExpiredError, FloodWaitError
 
 
 def _maybe_load_local_env():
@@ -113,44 +113,43 @@ def _ffprobe_ok(ffprobe_bin: str, path: str) -> tuple[bool, str]:
 def _now_local() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+def _ext_from_mime(mime: str) -> str:
+    m = (mime or "").strip().lower()
+    if m == "video/mp4":
+        return ".mp4"
+    if m in ("video/quicktime", "video/mov"):
+        return ".mov"
+    if m in ("video/x-matroska", "video/mkv"):
+        return ".mkv"
+    if m == "video/webm":
+        return ".webm"
+    return ".bin"
 
-def _pick_latest_file(folder: str, after_ts: float) -> str | None:
-    best = None
-    best_m = 0.0
+
+def _msg_ext(msg) -> str:
     try:
-        for name in os.listdir(folder):
-            fp = os.path.join(folder, name)
-            if not os.path.isfile(fp):
-                continue
-            try:
-                m = os.path.getmtime(fp)
-            except Exception:
-                continue
-            if m < after_ts:
-                continue
-            if m >= best_m:
-                best_m = m
-                best = fp
+        f = getattr(msg, "file", None)
+        ext = getattr(f, "ext", None)
+        if isinstance(ext, str) and ext.strip():
+            e = ext.strip().lower()
+            return e if e.startswith(".") else ("." + e)
+        mime = getattr(f, "mime_type", None) or ""
+        return _ext_from_mime(str(mime))
     except Exception:
-        return None
-    return best
+        return ".bin"
 
 
-def _normalize_download_result(fp, folder: str, after_ts: float) -> str | None:
-    if isinstance(fp, (list, tuple)):
-        fp = fp[0] if fp else None
-    if isinstance(fp, str) and fp and os.path.isfile(fp):
-        return fp
-    alt = _pick_latest_file(folder, after_ts)
-    if alt and os.path.isfile(alt):
-        return alt
-    return None
+def _msg_expected_size(msg) -> int:
+    try:
+        return int(getattr(getattr(msg, "file", None), "size", None) or 0)
+    except Exception:
+        return 0
 
 
 async def _download_media_with_timeouts(
     client: TelegramClient,
     msg,
-    folder: str,
+    out_path: str,
     base_timeout_sec: int,
     stall_timeout_sec: int,
     min_kbps: int,
@@ -178,6 +177,7 @@ async def _download_media_with_timeouts(
     started = loop.time()
     last_progress = started
     last_bytes = 0
+    last_print = started
 
     def _progress(cur: int, tot: int):
         nonlocal last_progress, last_bytes
@@ -186,7 +186,36 @@ async def _download_media_with_timeouts(
             last_bytes = cur_i
             last_progress = loop.time()
 
-    task = asyncio.create_task(client.download_media(msg, file=folder, progress_callback=_progress))
+    async def _reporter():
+        nonlocal last_print
+        while True:
+            await asyncio.sleep(15)
+            now = loop.time()
+            if now - last_print < 15:
+                continue
+            last_print = now
+            total_b = int(total or 0)
+            cur_b = int(last_bytes or 0)
+            elapsed = max(1.0, now - started)
+            speed = float(cur_b) / elapsed
+            if total_b > 0:
+                pct = (float(cur_b) / float(total_b)) * 100.0
+                eta = max(0, int((total_b - cur_b) / max(1.0, speed)))
+                print(
+                    f"[{_now_local()}] progress {os.path.basename(out_path)} "
+                    f"{cur_b/1024/1024:.1f}/{total_b/1024/1024:.1f}MB "
+                    f"({pct:.1f}%) {speed/1024/1024:.2f}MB/s eta={eta}s"
+                )
+            else:
+                print(
+                    f"[{_now_local()}] progress {os.path.basename(out_path)} "
+                    f"{cur_b/1024/1024:.1f}MB {speed/1024/1024:.2f}MB/s"
+                )
+
+    out_dir = os.path.dirname(out_path) or "."
+    os.makedirs(out_dir, exist_ok=True)
+    task = asyncio.create_task(client.download_media(msg, file=out_path, progress_callback=_progress))
+    reporter_task = asyncio.create_task(_reporter())
     try:
         while True:
             done, _ = await asyncio.wait({task}, timeout=5)
@@ -200,6 +229,10 @@ async def _download_media_with_timeouts(
                 task.cancel()
                 raise asyncio.TimeoutError("download stalled")
     finally:
+        try:
+            reporter_task.cancel()
+        except Exception:
+            pass
         if not task.done():
             task.cancel()
 
@@ -224,6 +257,8 @@ class Settings:
     max_download_timeout_sec: int
     download_max_attempts: int
     upload_max_mb: int
+    bigfile_threshold_mb: int
+    bigfile_concurrency: int
 
 
 def load_settings() -> Settings:
@@ -245,6 +280,8 @@ def load_settings() -> Settings:
     max_download_timeout_sec = _env_int("LOCAL_USERBOT_MAX_DOWNLOAD_TIMEOUT_SEC", 7200)
     download_max_attempts = _env_int("LOCAL_USERBOT_DOWNLOAD_MAX_ATTEMPTS", 0)
     upload_max_mb = _env_int("LOCAL_USERBOT_UPLOAD_MAX_MB", 0)
+    bigfile_threshold_mb = _env_int("LOCAL_USERBOT_BIGFILE_THRESHOLD_MB", 512)
+    bigfile_concurrency = _env_int("LOCAL_USERBOT_BIGFILE_CONCURRENCY", 2)
 
     if not api_id or not api_hash:
         raise SystemExit("missing LOCAL_USERBOT_API_ID/LOCAL_USERBOT_API_HASH")
@@ -274,6 +311,8 @@ def load_settings() -> Settings:
         max_download_timeout_sec=max(0, max_download_timeout_sec),
         download_max_attempts=max(0, download_max_attempts),
         upload_max_mb=max(0, upload_max_mb),
+        bigfile_threshold_mb=max(1, bigfile_threshold_mb),
+        bigfile_concurrency=max(1, min(8, bigfile_concurrency)),
     )
 
 
@@ -345,7 +384,14 @@ async def _scan_groups(client: TelegramClient, s: Settings) -> list[tuple[int, l
     return out
 
 
-async def _download_group(client: TelegramClient, s: Settings, group_id: int, items: list, state_lock: asyncio.Lock) -> bool:
+async def _download_group(
+    client: TelegramClient,
+    s: Settings,
+    group_id: int,
+    items: list,
+    state_lock: asyncio.Lock,
+    big_sem: asyncio.Semaphore,
+) -> bool:
     ids = [int(getattr(x, "id", 0) or 0) for x in items if int(getattr(x, "id", 0) or 0)]
     async with state_lock:
         state0 = _state_get(s.state_file)
@@ -379,32 +425,58 @@ async def _download_group(client: TelegramClient, s: Settings, group_id: int, it
     for m in items:
         if not getattr(m, "file", None):
             continue
-        expect = int(getattr(getattr(m, "file", None), "size", None) or 0)
         msg_id = int(getattr(m, "id", 0) or 0)
+        if not msg_id:
+            continue
+        expect = _msg_expected_size(m)
+        ext = _msg_ext(m)
+        out_path = os.path.join(folder, f"{msg_id}{ext}")
         attempts = 0
         while True:
             attempts += 1
             if s.download_max_attempts and attempts > int(s.download_max_attempts):
                 return False
             try:
-                started_ts = time.time()
-                print(f"[{_now_local()}] download msg_id={msg_id} size={expect/1024/1024:.1f}MB attempt={attempts}")
-                fp_raw = await _download_media_with_timeouts(
-                    client,
-                    m,
-                    folder,
-                    s.download_timeout_sec,
-                    s.download_stall_timeout_sec,
-                    s.min_download_kbps,
-                    s.max_download_timeout_sec,
+                try:
+                    if os.path.exists(out_path):
+                        os.remove(out_path)
+                except Exception:
+                    pass
+
+                print(
+                    f"[{_now_local()}] download msg_id={msg_id} size={expect/1024/1024:.1f}MB -> {out_path} attempt={attempts}"
                 )
-                fp = _normalize_download_result(fp_raw, folder, started_ts)
-                if expect > 0 and fp and os.path.isfile(fp):
+                if expect >= int(s.bigfile_threshold_mb) * 1024 * 1024:
+                    async with big_sem:
+                        fp = await _download_media_with_timeouts(
+                            client,
+                            m,
+                            out_path,
+                            s.download_timeout_sec,
+                            s.download_stall_timeout_sec,
+                            s.min_download_kbps,
+                            s.max_download_timeout_sec,
+                        )
+                else:
+                    fp = await _download_media_with_timeouts(
+                        client,
+                        m,
+                        out_path,
+                        s.download_timeout_sec,
+                        s.download_stall_timeout_sec,
+                        s.min_download_kbps,
+                        s.max_download_timeout_sec,
+                    )
+                if not fp or not os.path.isfile(fp):
+                    await asyncio.sleep(min(30, 5 * attempts))
+                    continue
+
+                if expect > 0:
                     try:
                         got = int(os.path.getsize(fp) or 0)
                     except Exception:
                         got = 0
-                    if got <= 0 or got != int(expect):
+                    if got != int(expect):
                         try:
                             os.remove(fp)
                         except Exception:
@@ -413,7 +485,20 @@ async def _download_group(client: TelegramClient, s: Settings, group_id: int, it
                         continue
                 break
             except FileReferenceExpiredError:
+                try:
+                    m2 = await client.get_messages(s.download_channel_id, ids=msg_id)
+                    if m2:
+                        m = m2
+                        expect = _msg_expected_size(m)
+                        ext2 = _msg_ext(m)
+                        out_path = os.path.join(folder, f"{msg_id}{ext2}")
+                except Exception:
+                    pass
                 await asyncio.sleep(min(60, 5 * attempts))
+                continue
+            except FloodWaitError as e:
+                wait_s = int(getattr(e, "seconds", None) or 0) or 60
+                await asyncio.sleep(min(3600, wait_s + 5))
                 continue
             except asyncio.TimeoutError:
                 await asyncio.sleep(min(60, 5 * attempts))
@@ -543,6 +628,7 @@ async def run_forever():
         print(f"lookback_days={s.lookback_days} poll_minutes={s.poll_minutes} download_concurrency={s.download_concurrency}")
         print(f"root={s.root}")
         sem = asyncio.Semaphore(int(s.download_concurrency))
+        big_sem = asyncio.Semaphore(int(s.bigfile_concurrency))
         state_lock = asyncio.Lock()
 
         async def download_tick():
@@ -555,7 +641,7 @@ async def run_forever():
             async def _one(gid: int, items: list):
                 async with sem:
                     try:
-                        await _download_group(client, s, gid, items, state_lock)
+                        await _download_group(client, s, gid, items, state_lock, big_sem)
                     except Exception:
                         return
 

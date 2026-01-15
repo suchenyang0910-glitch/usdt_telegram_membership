@@ -1,7 +1,10 @@
 import base64
 import csv
+import hmac
+import hashlib
 import io
 import json
+import mimetypes
 import os
 import secrets
 import socket
@@ -29,6 +32,7 @@ from config import (
     ADMIN_WEB_TRUST_PROXY,
     ADMIN_WEB_USER,
     BOT_TOKEN,
+    BOT_USERNAME,
     BROADCAST_ABORT_FAIL_RATE,
     BROADCAST_ABORT_MIN_SENT,
     BROADCAST_SLEEP_SEC,
@@ -40,7 +44,7 @@ from config import (
     PLANS,
 )
 from core.db import get_conn
-from core.models import init_tables, get_user, update_user_payment, mark_order_success, set_usdt_tx_status
+from core.models import init_tables, get_user, update_user_payment, mark_order_success, set_usdt_tx_status, list_categories, list_banners, upsert_category, delete_category, upsert_banner, delete_banner, set_video_category
 from bot.payments import compute_new_paid_until
 
 
@@ -59,6 +63,33 @@ def _csv_bytes(rows: list[dict], cols: list[str]) -> bytes:
     for r in rows:
         w.writerow([("" if r.get(c) is None else str(r.get(c))) for c in cols])
     return buf.getvalue().encode("utf-8-sig")
+
+
+def _validate_webapp_init_data(init_data: str, bot_token: str) -> dict | None:
+    try:
+        parsed = parse_qs(init_data)
+        hash_val = parsed.get("hash", [""])[0]
+        if not hash_val:
+            return None
+        
+        data_check_arr = []
+        for k, v in parsed.items():
+            if k == "hash":
+                continue
+            data_check_arr.append(f"{k}={v[0]}")
+        
+        data_check_arr.sort()
+        data_check_string = "\n".join(data_check_arr)
+        
+        secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
+        calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+        
+        if calculated_hash == hash_val:
+            user_json = parsed.get("user", ["{}"])[0]
+            return json.loads(user_json)
+        return None
+    except Exception:
+        return None
 
 
 def _basic_auth_ok(headers) -> bool:
@@ -180,6 +211,35 @@ INDEX_HTML = """<!doctype html>
   <div class="muted">需要浏览器 Basic Auth 登录。时间默认 UTC。</div>
 
   <div class="grid" id="cards"></div>
+
+  <h3>小程序配置</h3>
+  <div class="row">
+    <div>
+      <div class="muted">分类管理</div>
+      <div class="row">
+        <input id="catName" placeholder="名称" style="min-width:160px" />
+        <input id="catSort" placeholder="排序(0-99)" style="min-width:80px" />
+        <label><input id="catVisible" type="checkbox" checked /> 显示</label>
+        <button onclick="upsertCategory()">添加/更新</button>
+        <button onclick="loadCategories()">刷新</button>
+      </div>
+      <div id="categories"></div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <div>
+      <div class="muted">Banner 管理</div>
+      <div class="row">
+        <input id="banImg" placeholder="图片URL" style="min-width:240px" />
+        <input id="banLink" placeholder="跳转URL" style="min-width:240px" />
+        <input id="banSort" placeholder="排序" style="min-width:80px" />
+        <label><input id="banActive" type="checkbox" checked /> 启用</label>
+        <button onclick="upsertBanner()">添加/更新</button>
+        <button onclick="loadBanners()">刷新</button>
+      </div>
+      <div id="banners"></div>
+    </div>
+  </div>
 
   <h3>用户查询</h3>
   <div class="row">
@@ -571,12 +631,42 @@ async function retryTxMatch(){
   await loadReconcile();
 }
 
+async function loadCategories(){
+  const data = await jget("/api/categories");
+  document.getElementById("categories").innerHTML = tableHtml(data.items||[]);
+}
+async function upsertCategory(){
+  const body = {
+    name: document.getElementById("catName").value.trim(),
+    sort_order: parseInt(document.getElementById("catSort").value.trim()||"0",10),
+    is_visible: document.getElementById("catVisible").checked
+  };
+  await jpost("/api/categories_upsert", body);
+  await loadCategories();
+}
+async function loadBanners(){
+  const data = await jget("/api/banners");
+  document.getElementById("banners").innerHTML = tableHtml(data.items||[]);
+}
+async function upsertBanner(){
+  const body = {
+    image_url: document.getElementById("banImg").value.trim(),
+    link_url: document.getElementById("banLink").value.trim(),
+    sort_order: parseInt(document.getElementById("banSort").value.trim()||"0",10),
+    is_active: document.getElementById("banActive").checked
+  };
+  await jpost("/api/banners_upsert", body);
+  await loadBanners();
+}
+
 loadStats();
 loadOrders();
 loadCoupons();
 loadAccessCodes();
 loadBroadcasts();
 loadReconcile();
+loadCategories();
+loadBanners();
 </script>
 </body>
 </html>
@@ -627,6 +717,66 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         path = u.path
+
+        if path.startswith("/webapp/"):
+            return self._serve_static_webapp(path)
+
+        if path.startswith("/api/webapp/"):
+            qs = parse_qs(u.query)
+            init_data = self.headers.get("X-Telegram-Init-Data") or (qs.get("initData", [""])[0] or "")
+            user_data = _validate_webapp_init_data(init_data, BOT_TOKEN)
+
+            if path == "/api/webapp/auth":
+                if not user_data:
+                    return self._send(401, b"Invalid initData", "text/plain")
+                uid = int(user_data.get("id"))
+                u = get_user(uid)
+                is_vip = False
+                if u and u.get("paid_until"):
+                    if u["paid_until"] > _utc_now():
+                        is_vip = True
+                return self._send(200, _json_bytes({"user": u, "is_vip": is_vip, "bot_username": BOT_USERNAME}), "application/json; charset=utf-8")
+            
+            if path == "/api/webapp/config":
+                return self._send(200, _json_bytes({
+                    "categories": list_categories(visible_only=True),
+                    "banners": list_banners(active_only=True)
+                }), "application/json; charset=utf-8")
+
+            if path == "/api/webapp/plans":
+                return self._send(200, _json_bytes({"plans": PLANS}), "application/json; charset=utf-8")
+
+            if path == "/api/webapp/videos":
+                q = (qs.get("q", [""])[0] or "").strip()
+                page = int((qs.get("page", ["1"])[0] or "1"))
+                limit = int((qs.get("limit", ["20"])[0] or "20"))
+                cat_id = int((qs.get("category_id", ["0"])[0] or "0"))
+                sort = (qs.get("sort", ["latest"])[0] or "latest")
+                
+                is_vip = False
+                if user_data:
+                    uid = int(user_data.get("id"))
+                    u = get_user(uid)
+                    if u and u.get("paid_until") and u["paid_until"] > _utc_now():
+                        is_vip = True
+                
+                data = list_videos(q=q, page=page, limit=limit, category_id=cat_id, sort=sort)
+                for item in data["items"]:
+                    paid_cid = str(item["channel_id"])
+                    if paid_cid.startswith("-100"): paid_cid = paid_cid[4:]
+                    item["paid_link"] = f"https://t.me/c/{paid_cid}/{item['message_id']}"
+                    
+                    item["free_link"] = None
+                    if item.get("free_channel_id") and item.get("free_message_id"):
+                         free_cid = str(item["free_channel_id"])
+                         if free_cid.startswith("-100"): free_cid = free_cid[4:]
+                         item["free_link"] = f"https://t.me/c/{free_cid}/{item['free_message_id']}"
+                    
+                    item["is_locked"] = not is_vip
+                    
+                return self._send(200, _json_bytes(data), "application/json; charset=utf-8")
+            
+            return self._send(404, b"Not Found", "text/plain")
 
         if path == "/health":
             ip = _client_ip(self)
@@ -708,6 +858,14 @@ class Handler(BaseHTTPRequestHandler):
                     "pending_orders": list_pending_orders_older(minutes=pending_min, limit=limit),
                 }
             )
+            return self._send(200, body, "application/json; charset=utf-8")
+
+        if path == "/api/categories":
+            body = _json_bytes({"items": list_categories(visible_only=False)})
+            return self._send(200, body, "application/json; charset=utf-8")
+        
+        if path == "/api/banners":
+            body = _json_bytes({"items": list_banners(active_only=False)})
             return self._send(200, body, "application/json; charset=utf-8")
 
         if path == "/api/export/users.csv":
@@ -795,6 +953,33 @@ class Handler(BaseHTTPRequestHandler):
             data = {}
 
         actor = getattr(self, "_auth_user", ADMIN_WEB_USER)
+        if path == "/api/categories_upsert":
+            upsert_category(
+                id=int(data.get("id") or 0),
+                name=data.get("name"),
+                is_visible=bool(data.get("is_visible")),
+                sort_order=int(data.get("sort_order") or 0)
+            )
+            return self._send(200, _json_bytes({"ok": True}), "application/json; charset=utf-8")
+            
+        if path == "/api/banners_upsert":
+            upsert_banner(
+                id=int(data.get("id") or 0),
+                image_url=data.get("image_url"),
+                link_url=data.get("link_url"),
+                is_active=bool(data.get("is_active")),
+                sort_order=int(data.get("sort_order") or 0)
+            )
+            return self._send(200, _json_bytes({"ok": True}), "application/json; charset=utf-8")
+
+        if path == "/api/categories_delete":
+            delete_category(int(data.get("id") or 0))
+            return self._send(200, _json_bytes({"ok": True}), "application/json; charset=utf-8")
+
+        if path == "/api/banners_delete":
+            delete_banner(int(data.get("id") or 0))
+            return self._send(200, _json_bytes({"ok": True}), "application/json; charset=utf-8")
+
         if path == "/api/user_extend":
             telegram_id = int(str(data.get("telegram_id") or "0"))
             days = int(data.get("days") or 0)
@@ -924,8 +1109,85 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send(404, b"not found", "text/plain; charset=utf-8")
 
+    def _serve_static_webapp(self, path: str):
+        if ".." in path:
+            return self._forbidden("invalid path")
+        rel_path = path[len("/webapp/"):]
+        if not rel_path or rel_path.endswith("/"):
+            rel_path += "index.html"
+        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
+        full_path = os.path.join(base_dir, rel_path)
+        if not os.path.abspath(full_path).startswith(base_dir):
+            return self._forbidden("invalid path")
+        if not os.path.exists(full_path) or not os.path.isfile(full_path):
+            return self._send(404, b"Not Found", "text/plain")
+        ctype, _ = mimetypes.guess_type(full_path)
+        if not ctype:
+            ctype = "application/octet-stream"
+        try:
+            with open(full_path, "rb") as f:
+                content = f.read()
+            self._send(200, content, ctype)
+        except Exception as e:
+            self._send(500, str(e).encode("utf-8"), "text/plain")
+
     def log_message(self, format, *args):
         return
+
+
+def list_videos(q: str, page: int, limit: int, category_id: int = 0, sort: str = "latest") -> dict:
+    page = max(1, page)
+    limit = max(1, min(limit, 100))
+    offset = (page - 1) * limit
+    
+    conn = get_conn()
+    try:
+        cur = conn.cursor(dictionary=True)
+        where_clauses = ["1=1"]
+        params = []
+        
+        if q:
+            where_clauses.append("caption LIKE %s")
+            params.append(f"%{q}%")
+        
+        if category_id > 0:
+            where_clauses.append("category_id = %s")
+            params.append(category_id)
+            
+        where_str = " AND ".join(where_clauses)
+        
+        order_by = "created_at DESC"
+        if sort == "hot":
+            order_by = "view_count DESC, created_at DESC"
+        
+        # Get count
+        cur.execute(f"SELECT COUNT(*) as cnt FROM videos WHERE {where_str}", tuple(params))
+        total = cur.fetchone()["cnt"]
+        
+        # Get items
+        sql = f"""
+            SELECT id, channel_id, message_id, caption, view_count, category_id, free_channel_id, free_message_id, is_hot, created_at 
+            FROM videos 
+            WHERE {where_str} 
+            ORDER BY {order_by} 
+            LIMIT %s OFFSET %s
+        """
+        params.extend([limit, offset])
+        cur.execute(sql, tuple(params))
+        items = cur.fetchall()
+        
+        return {
+            "items": items,
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "pages": (total + limit - 1) // limit
+        }
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def _q_one(sql: str, params=()):
