@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+from telethon.errors import FileReferenceExpiredError
 
 
 def _maybe_load_local_env():
@@ -109,6 +110,10 @@ def _ffprobe_ok(ffprobe_bin: str, path: str) -> tuple[bool, str]:
         return False, f"{type(e).__name__}: {e}"
 
 
+def _now_local() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
 async def _download_media_with_timeouts(
     client: TelegramClient,
     msg,
@@ -119,11 +124,22 @@ async def _download_media_with_timeouts(
     max_timeout_sec: int,
 ):
     total = int(getattr(getattr(msg, "file", None), "size", None) or 0)
-    base = max(60, int(base_timeout_sec or 0))
-    cap = max(base, int(max_timeout_sec or base))
+    base = int(base_timeout_sec or 0)
+    cap = int(max_timeout_sec or 0)
     kbps = max(16, int(min_kbps or 0))
-    overall = base if total <= 0 else min(cap, max(base, int((float(total) / float(kbps * 1024)) * 2.0 + 60.0)))
-    stall = max(30, int(stall_timeout_sec or 0))
+    stall = int(stall_timeout_sec or 0)
+
+    overall: float | None = None
+    if base > 0:
+        base2 = max(60, base)
+        if cap > 0:
+            cap2 = max(base2, cap)
+            overall = float(base2 if total <= 0 else min(cap2, max(base2, int((float(total) / float(kbps * 1024)) * 2.0 + 60.0))))
+        else:
+            overall = None
+    stall2: float | None = None
+    if stall > 0:
+        stall2 = float(max(30, stall))
 
     loop = asyncio.get_running_loop()
     started = loop.time()
@@ -144,10 +160,10 @@ async def _download_media_with_timeouts(
             if task in done:
                 return await task
             now = loop.time()
-            if now - started > float(overall):
+            if overall is not None and (now - started) > overall:
                 task.cancel()
                 raise asyncio.TimeoutError("download overall timeout")
-            if now - last_progress > float(stall):
+            if stall2 is not None and (now - last_progress) > stall2:
                 task.cancel()
                 raise asyncio.TimeoutError("download stalled")
     finally:
@@ -173,6 +189,8 @@ class Settings:
     download_stall_timeout_sec: int
     min_download_kbps: int
     max_download_timeout_sec: int
+    download_max_attempts: int
+    upload_max_mb: int
 
 
 def load_settings() -> Settings:
@@ -192,6 +210,8 @@ def load_settings() -> Settings:
     download_stall_timeout_sec = _env_int("LOCAL_USERBOT_DOWNLOAD_STALL_TIMEOUT_SEC", 180)
     min_download_kbps = _env_int("LOCAL_USERBOT_MIN_DOWNLOAD_KBPS", 128)
     max_download_timeout_sec = _env_int("LOCAL_USERBOT_MAX_DOWNLOAD_TIMEOUT_SEC", 7200)
+    download_max_attempts = _env_int("LOCAL_USERBOT_DOWNLOAD_MAX_ATTEMPTS", 0)
+    upload_max_mb = _env_int("LOCAL_USERBOT_UPLOAD_MAX_MB", 0)
 
     if not api_id or not api_hash:
         raise SystemExit("missing LOCAL_USERBOT_API_ID/LOCAL_USERBOT_API_HASH")
@@ -215,10 +235,12 @@ def load_settings() -> Settings:
         state_file=state_file,
         uploaded_dir=uploaded_dir,
         ffprobe_bin=ffprobe_bin,
-        download_timeout_sec=max(60, download_timeout_sec),
-        download_stall_timeout_sec=max(30, download_stall_timeout_sec),
+        download_timeout_sec=max(0, download_timeout_sec),
+        download_stall_timeout_sec=max(0, download_stall_timeout_sec),
         min_download_kbps=max(16, min_download_kbps),
-        max_download_timeout_sec=max(download_timeout_sec, max_download_timeout_sec),
+        max_download_timeout_sec=max(0, max_download_timeout_sec),
+        download_max_attempts=max(0, download_max_attempts),
+        upload_max_mb=max(0, upload_max_mb),
     )
 
 
@@ -322,15 +344,46 @@ async def _download_group(client: TelegramClient, s: Settings, group_id: int, it
     for m in items:
         if not getattr(m, "file", None):
             continue
-        await _download_media_with_timeouts(
-            client,
-            m,
-            folder,
-            s.download_timeout_sec,
-            s.download_stall_timeout_sec,
-            s.min_download_kbps,
-            s.max_download_timeout_sec,
-        )
+        expect = int(getattr(getattr(m, "file", None), "size", None) or 0)
+        msg_id = int(getattr(m, "id", 0) or 0)
+        attempts = 0
+        while True:
+            attempts += 1
+            if s.download_max_attempts and attempts > int(s.download_max_attempts):
+                return False
+            try:
+                print(f"[{_now_local()}] download msg_id={msg_id} size={expect/1024/1024:.1f}MB attempt={attempts}")
+                fp = await _download_media_with_timeouts(
+                    client,
+                    m,
+                    folder,
+                    s.download_timeout_sec,
+                    s.download_stall_timeout_sec,
+                    s.min_download_kbps,
+                    s.max_download_timeout_sec,
+                )
+                if expect > 0 and fp and os.path.exists(fp):
+                    try:
+                        got = int(os.path.getsize(fp) or 0)
+                    except Exception:
+                        got = 0
+                    if got > 0 and got < int(expect):
+                        try:
+                            os.remove(fp)
+                        except Exception:
+                            pass
+                        time.sleep(min(60, 5 * attempts))
+                        continue
+                break
+            except FileReferenceExpiredError:
+                time.sleep(min(60, 5 * attempts))
+                continue
+            except asyncio.TimeoutError:
+                time.sleep(min(60, 5 * attempts))
+                continue
+            except Exception:
+                time.sleep(min(60, 5 * attempts))
+                continue
 
     imgs, vids = _list_media_files(folder)
     if not imgs and not vids:
@@ -394,6 +447,15 @@ async def _upload_one_completed_folder(client: TelegramClient, s: Settings):
     files = imgs + vids
     if not files:
         return
+
+    if int(s.upload_max_mb or 0) > 0:
+        limit = int(s.upload_max_mb) * 1024 * 1024
+        for fp in files:
+            try:
+                if os.path.getsize(fp) > limit:
+                    return
+            except Exception:
+                continue
 
     for fp in vids:
         ok, _ = _ffprobe_ok(s.ffprobe_bin, fp)

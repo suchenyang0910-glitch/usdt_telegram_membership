@@ -183,6 +183,17 @@ def _to_str_list(x) -> list[str]:
 # Telegram Bot
 BOT_TOKEN = str(_cfg_value("BOT_TOKEN", "") or "").strip()
 BOT_USERNAME = str(_cfg_value("BOT_USERNAME", "") or "").strip() or None
+if BOT_USERNAME:
+    BOT_USERNAME = BOT_USERNAME.strip()
+    if BOT_USERNAME.startswith("https://t.me/"):
+        BOT_USERNAME = BOT_USERNAME[len("https://t.me/") :]
+    if BOT_USERNAME.startswith("http://t.me/"):
+        BOT_USERNAME = BOT_USERNAME[len("http://t.me/") :]
+    if BOT_USERNAME.startswith("@"):
+        BOT_USERNAME = BOT_USERNAME[1:]
+    BOT_USERNAME = BOT_USERNAME.split("?", 1)[0].strip().strip("/")
+    if not BOT_USERNAME:
+        BOT_USERNAME = None
 
 # 频道ID（必须是真实的 chat_id 整数）
 PAID_CHANNEL_ID = _to_int(_cfg_value("PAID_CHANNEL_ID", "-1002581584398"))   # 付费频道

@@ -504,7 +504,8 @@ async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not addr:
                 try:
                     addr = allocate_address(telegram_id)
-                except Exception:
+                except Exception as e:
+                    logger.warning("[pay] allocate_address failed uid=%s err=%s", telegram_id, e)
                     addr = None
 
         coupon_code = ((u or {}).get("pending_coupon") or "").strip() or None
