@@ -40,11 +40,34 @@ from config import (
     HEARTBEAT_USERBOT_FILE,
     JOIN_REQUEST_ENABLE,
     JOIN_REQUEST_LINK_EXPIRE_HOURS,
+    LOCAL_UPLOADER_TOKEN,
     PAID_CHANNEL_ID,
     PLANS,
 )
 from core.db import get_conn
-from core.models import init_tables, get_user, update_user_payment, mark_order_success, set_usdt_tx_status, list_categories, list_banners, upsert_category, delete_category, upsert_banner, delete_banner, set_video_category
+from core.models import (
+    admin_create_video_job,
+    admin_set_video_publish,
+    admin_set_video_sort,
+    admin_update_video_meta,
+    get_user,
+    init_tables,
+    list_banners,
+    list_categories,
+    list_videos_admin,
+    local_uploader_claim_next,
+    local_uploader_update,
+    mark_order_success,
+    record_video_view,
+    set_usdt_tx_status,
+    set_video_category,
+    upsert_banner,
+    upsert_category,
+    update_user_payment,
+    user_viewed_tags,
+    delete_banner,
+    delete_category,
+)
 from bot.payments import compute_new_paid_until
 
 
@@ -195,9 +218,16 @@ INDEX_HTML = """<!doctype html>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>PV Admin</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;max-width:1100px;margin:24px auto;padding:0 14px;color:#111}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;color:#111;background:#fafafa}
+    .layout{display:flex;min-height:100vh}
+    .side{width:240px;background:#111;color:#fff;padding:18px 14px;position:sticky;top:0;height:100vh;box-sizing:border-box}
+    .brand{font-weight:800;font-size:16px}
+    .nav{margin-top:14px;display:flex;flex-direction:column;gap:6px}
+    .nav a{color:#fff;text-decoration:none;padding:10px 10px;border-radius:10px;display:block}
+    .nav a.active{background:#2b2b2b}
+    .main{flex:1;padding:22px 18px;box-sizing:border-box;max-width:1200px}
     .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:12px 0}
-    .card{border:1px solid #ddd;border-radius:10px;padding:12px}
+    .card{border:1px solid #ddd;border-radius:10px;padding:12px;background:#fff}
     .k{color:#666;font-size:12px}
     .v{font-size:22px;font-weight:700;margin-top:6px}
     input,button,textarea{padding:10px;border-radius:10px;border:1px solid #ccc}
@@ -207,14 +237,35 @@ INDEX_HTML = """<!doctype html>
     th,td{border-bottom:1px solid #eee;padding:8px;text-align:left;font-size:13px;vertical-align:top}
     .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
     .muted{color:#666;font-size:12px}
+    .page{display:none}
+    .page.active{display:block}
+    .panel{background:#fff;border:1px solid #e7e7e7;border-radius:12px;padding:14px}
   </style>
 </head>
 <body>
-  <h2>PV 管理后台</h2>
-  <div class="muted">需要浏览器 Basic Auth 登录。时间默认 UTC。</div>
+  <div class="layout">
+    <aside class="side">
+      <div class="brand">PV Admin</div>
+      <div class="muted" style="color:#cfcfcf;margin-top:6px">UTC</div>
+      <nav class="nav">
+        <a href="#home" data-page="home" onclick="showPage('home')">首页</a>
+        <a href="#miniapp" data-page="miniapp" onclick="showPage('miniapp')">小程序配置</a>
+        <a href="#users" data-page="users" onclick="showPage('users')">用户列表</a>
+        <a href="#ops" data-page="ops" onclick="showPage('ops')">运营工具</a>
+        <a href="#reconcile" data-page="reconcile" onclick="showPage('reconcile')">对账工具</a>
+        <a href="#videos" data-page="videos" onclick="showPage('videos')">视频管理</a>
+      </nav>
+    </aside>
+    <main class="main">
+      <h2>PV 管理后台</h2>
+      <div class="muted">需要浏览器 Basic Auth 登录。时间默认 UTC。</div>
 
-  <div class="grid" id="cards"></div>
+      <div class="page" id="page-home">
+        <h3>首页</h3>
+        <div class="grid" id="cards"></div>
+      </div>
 
+      <div class="page" id="page-miniapp">
   <h3>小程序配置</h3>
   <div class="row">
     <div>
@@ -244,6 +295,9 @@ INDEX_HTML = """<!doctype html>
     </div>
   </div>
 
+      </div>
+
+      <div class="page" id="page-users">
   <h3>用户查询</h3>
   <div class="row">
     <input id="q" placeholder="telegram_id 或 username" style="min-width:280px" />
@@ -267,6 +321,9 @@ INDEX_HTML = """<!doctype html>
   <div class="muted" id="opResult" style="margin-top:8px"></div>
   <div id="detail"></div>
 
+      </div>
+
+      <div class="page" id="page-ops">
   <h3>运营工具</h3>
   <div class="row">
     <div>
@@ -347,6 +404,9 @@ INDEX_HTML = """<!doctype html>
     <button onclick="exportAudit()">导出审计(7d)</button>
   </div>
 
+      </div>
+
+      <div class="page" id="page-reconcile">
   <h3>对账工具</h3>
   <div class="row">
     <input id="rePendingMin" placeholder="pending 超过分钟(默认60)" style="min-width:240px" />
@@ -367,6 +427,44 @@ INDEX_HTML = """<!doctype html>
     <span class="muted" id="ordersHint"></span>
   </div>
   <div id="orders"></div>
+
+      </div>
+
+      <div class="page" id="page-videos">
+        <h3>视频管理</h3>
+        <div class="panel">
+          <div class="row">
+            <input id="vQ" placeholder="搜索标题/文案" style="min-width:260px" />
+            <input id="vStatus" placeholder="status(pending/uploading/done/failed)" style="min-width:260px" />
+            <button onclick="loadVideosAdmin()">查询</button>
+          </div>
+          <div id="videosAdmin"></div>
+        </div>
+        <div style="height:12px"></div>
+        <div class="panel">
+          <div class="muted">视频上传（创建上传任务，本地 userbot 拉取并上传到频道后回填链接）</div>
+          <div class="row" style="margin-top:10px">
+            <input id="vLocal" placeholder="本地文件名（local userbot 识别）" style="min-width:320px" />
+            <input id="vCategory" placeholder="分类ID" style="min-width:120px" />
+            <input id="vSort" placeholder="排序(越大越靠前)" style="min-width:160px" />
+            <label class="muted"><input id="vPub" type="checkbox" checked /> 上架</label>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <input id="vCover" placeholder="展示图片URL(可选)" style="min-width:420px" />
+            <input id="vTags" placeholder="标签(逗号分隔,可选)" style="min-width:420px" />
+          </div>
+          <div class="row" style="margin-top:10px">
+            <textarea id="vCaption" placeholder="文案内容（标题/描述）"></textarea>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <button onclick="createVideoJob()">创建上传任务</button>
+          </div>
+          <div class="muted" id="vResult" style="margin-top:8px"></div>
+        </div>
+      </div>
+
+    </main>
+  </div>
 
 <script>
 async function jget(url){
@@ -410,6 +508,22 @@ function tableHtml(rows){
   return `<table><thead>${head}</thead><tbody>${body}</tbody></table>`;
 }
 
+function showPage(name){
+  const pages = ["home","miniapp","users","ops","reconcile","videos"];
+  pages.forEach(p=>{
+    const el = document.getElementById("page-"+p);
+    if(el) el.classList.toggle("active", p===name);
+    document.querySelectorAll(`.nav a[data-page='${p}']`).forEach(a=>a.classList.toggle("active", p===name));
+  });
+  try{ history.replaceState(null,"","#"+name); }catch(e){}
+}
+
+function initPage(){
+  const h = (location.hash||"").replace("#","").trim();
+  const pages = new Set(["home","miniapp","users","ops","reconcile","videos"]);
+  showPage(pages.has(h)?h:"home");
+}
+
 async function loadUsers(){
   const q = document.getElementById("q").value.trim();
   const url = "/api/users?q=" + encodeURIComponent(q) + "&limit=50";
@@ -425,6 +539,7 @@ async function loadUserDetail(){
   blocks.push("<h4>用户</h4>" + tableHtml([data.user||{}]));
   blocks.push("<h4>最近订单</h4>" + tableHtml(data.orders||[]));
   blocks.push("<h4>最近入账</h4>" + tableHtml(data.txs||[]));
+  blocks.push("<h4>浏览标签</h4>" + tableHtml(data.viewed_tags||[]));
   document.getElementById("detail").innerHTML = blocks.join("");
 }
 
@@ -662,6 +777,29 @@ async function upsertBanner(){
   await loadBanners();
 }
 
+async function loadVideosAdmin(){
+  const q = document.getElementById("vQ").value.trim();
+  const status = document.getElementById("vStatus").value.trim();
+  const url = "/api/videos_admin?q=" + encodeURIComponent(q) + "&status=" + encodeURIComponent(status) + "&limit=200";
+  const data = await jget(url);
+  document.getElementById("videosAdmin").innerHTML = tableHtml(data.items||[]);
+}
+
+async function createVideoJob(){
+  const body = {
+    local_filename: document.getElementById("vLocal").value.trim(),
+    category_id: parseInt(document.getElementById("vCategory").value.trim()||"0",10),
+    sort_order: parseInt(document.getElementById("vSort").value.trim()||"0",10),
+    is_published: document.getElementById("vPub").checked,
+    cover_url: document.getElementById("vCover").value.trim(),
+    tags: document.getElementById("vTags").value.trim(),
+    caption: document.getElementById("vCaption").value.trim()
+  };
+  const r = await jpost("/api/video_create", body);
+  document.getElementById("vResult").innerText = "已创建任务 video_id=" + (r.id || "0");
+  await loadVideosAdmin();
+}
+
 loadStats();
 loadOrders();
 loadCoupons();
@@ -670,6 +808,7 @@ loadBroadcasts();
 loadReconcile();
 loadCategories();
 loadBanners();
+initPage();
 </script>
 </body>
 </html>
@@ -681,6 +820,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _forbidden(self, msg: str = "forbidden"):
         self._send(HTTPStatus.FORBIDDEN, (msg or "forbidden").encode("utf-8"), "text/plain; charset=utf-8")
+
+    def _send_headers_only(self, code: int, ctype: str, length: int):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(int(length)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
 
     def _send(self, code: int, body: bytes, ctype: str):
         self.send_response(code)
@@ -716,6 +862,117 @@ class Handler(BaseHTTPRequestHandler):
         self._auth_user, self._auth_role = ident
         self._auth_ip = ip
         return True
+
+    def _require_local_uploader(self, qs: dict | None = None) -> bool:
+        token = (self.headers.get("X-Local-Uploader-Token") or "").strip()
+        if not token and qs:
+            token = (qs.get("token", [""])[0] or "").strip()
+        if not LOCAL_UPLOADER_TOKEN:
+            self._forbidden("local uploader disabled")
+            return False
+        if token != LOCAL_UPLOADER_TOKEN:
+            self._forbidden("bad token")
+            return False
+        return True
+
+    def _head_static_webapp(self, path: str):
+        if ".." in path:
+            return self._forbidden("invalid path")
+        rel_path = path[len("/webapp/") :]
+        if not rel_path or rel_path.endswith("/"):
+            rel_path += "index.html"
+        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
+        full_path = os.path.join(base_dir, rel_path)
+        if not os.path.abspath(full_path).startswith(base_dir):
+            return self._forbidden("invalid path")
+        if not os.path.exists(full_path) or not os.path.isfile(full_path):
+            return self._send_headers_only(404, "text/plain", 0)
+        ctype, _ = mimetypes.guess_type(full_path)
+        if not ctype:
+            ctype = "application/octet-stream"
+        try:
+            size = int(os.path.getsize(full_path))
+        except Exception:
+            size = 0
+        return self._send_headers_only(200, ctype, size)
+
+    def do_HEAD(self):
+        u = urlparse(self.path)
+        path = u.path
+
+        if path.startswith("/webapp/"):
+            return self._head_static_webapp(path)
+
+        if path == "/health":
+            ip = _client_ip(self)
+            if not _ip_allowed(ip):
+                self.send_response(HTTPStatus.FORBIDDEN)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", "14")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+            body = _json_bytes({"ok": True, "ts": _utc_now().isoformat()})
+            return self._send_headers_only(200, "application/json; charset=utf-8", len(body))
+
+        if path.startswith("/api/webapp/"):
+            qs = parse_qs(u.query)
+            init_data = self.headers.get("X-Telegram-Init-Data") or (qs.get("initData", [""])[0] or "")
+            user_data = _validate_webapp_init_data(init_data, BOT_TOKEN)
+
+            if path == "/api/webapp/auth":
+                if not user_data:
+                    return self._send_headers_only(401, "text/plain", len(b"Invalid initData"))
+                uid = int(user_data.get("id"))
+                u = get_user(uid)
+                is_vip = False
+                if u and u.get("paid_until"):
+                    if u["paid_until"] > _utc_now():
+                        is_vip = True
+                body = _json_bytes({"user": u, "is_vip": is_vip, "bot_username": BOT_USERNAME})
+                return self._send_headers_only(200, "application/json; charset=utf-8", len(body))
+
+            if path == "/api/webapp/config":
+                body = _json_bytes({"categories": list_categories(visible_only=True), "banners": list_banners(active_only=True)})
+                return self._send_headers_only(200, "application/json; charset=utf-8", len(body))
+
+            if path == "/api/webapp/plans":
+                body = _json_bytes({"plans": PLANS})
+                return self._send_headers_only(200, "application/json; charset=utf-8", len(body))
+
+            if path == "/api/webapp/videos":
+                q = (qs.get("q", [""])[0] or "").strip()
+                page = int((qs.get("page", ["1"])[0] or "1"))
+                limit = int((qs.get("limit", ["20"])[0] or "20"))
+                cat_id = int((qs.get("category_id", ["0"])[0] or "0"))
+                sort = (qs.get("sort", ["latest"])[0] or "latest")
+                is_vip = False
+                if user_data:
+                    uid = int(user_data.get("id"))
+                    u = get_user(uid)
+                    if u and u.get("paid_until") and u["paid_until"] > _utc_now():
+                        is_vip = True
+                data = list_videos(q=q, page=page, limit=limit, category_id=cat_id, sort=sort)
+                for item in data["items"]:
+                    paid_cid = str(item["channel_id"])
+                    if paid_cid.startswith("-100"):
+                        paid_cid = paid_cid[4:]
+                    item["paid_link"] = f"https://t.me/c/{paid_cid}/{item['message_id']}"
+                    item["free_link"] = None
+                    if item.get("free_channel_id") and item.get("free_message_id"):
+                        free_cid = str(item["free_channel_id"])
+                        if free_cid.startswith("-100"):
+                            free_cid = free_cid[4:]
+                        item["free_link"] = f"https://t.me/c/{free_cid}/{item['free_message_id']}"
+                    item["is_locked"] = not is_vip
+                body = _json_bytes(data)
+                return self._send_headers_only(200, "application/json; charset=utf-8", len(body))
+
+            return self._send_headers_only(404, "text/plain", 0)
+
+        if not self._require_auth():
+            return
+        return self._send_headers_only(200, "text/plain", 0)
 
     def do_GET(self):
         u = urlparse(self.path)
@@ -778,7 +1035,27 @@ class Handler(BaseHTTPRequestHandler):
                     item["is_locked"] = not is_vip
                     
                 return self._send(200, _json_bytes(data), "application/json; charset=utf-8")
+
+            if path == "/api/webapp/track_view":
+                if not user_data:
+                    return self._send(401, b"Invalid initData", "text/plain")
+                vid = int((qs.get("video_id", ["0"])[0] or "0"))
+                if vid > 0:
+                    try:
+                        record_video_view(int(user_data.get("id")), vid)
+                    except Exception:
+                        pass
+                return self._send(200, _json_bytes({"ok": True}), "application/json; charset=utf-8")
             
+            return self._send(404, b"Not Found", "text/plain")
+
+        if path.startswith("/api/local_uploader/"):
+            qs = parse_qs(u.query)
+            if not self._require_local_uploader(qs):
+                return
+            if path == "/api/local_uploader/claim":
+                job = local_uploader_claim_next()
+                return self._send(200, _json_bytes({"job": job}), "application/json; charset=utf-8")
             return self._send(404, b"Not Found", "text/plain")
 
         if path == "/health":
@@ -796,6 +1073,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/stats":
             body = _json_bytes(stats())
+            return self._send(200, body, "application/json; charset=utf-8")
+
+        if path == "/api/videos_admin":
+            qs = parse_qs(u.query)
+            q = (qs.get("q", [""])[0] or "").strip()
+            status = (qs.get("status", [""])[0] or "").strip() or None
+            limit = int((qs.get("limit", ["200"])[0] or "200"))
+            body = _json_bytes({"items": list_videos_admin(q=q, limit=limit, status=status)})
             return self._send(200, body, "application/json; charset=utf-8")
 
         if path == "/api/users":
@@ -938,6 +1223,34 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         path = u.path
 
+        if path.startswith("/api/local_uploader/"):
+            qs = parse_qs(u.query)
+            if not self._require_local_uploader(qs):
+                return
+            try:
+                n = int(self.headers.get("Content-Length") or "0")
+            except Exception:
+                n = 0
+            raw = self.rfile.read(n) if n > 0 else b"{}"
+            try:
+                data = json.loads(raw.decode("utf-8", errors="ignore") or "{}")
+            except Exception:
+                data = {}
+
+            if path == "/api/local_uploader/update":
+                local_uploader_update(
+                    video_id=int(data.get("video_id") or 0),
+                    upload_status=(data.get("upload_status") or "").strip(),
+                    channel_id=data.get("channel_id"),
+                    message_id=data.get("message_id"),
+                    free_channel_id=data.get("free_channel_id"),
+                    free_message_id=data.get("free_message_id"),
+                    file_id=data.get("file_id"),
+                    error=data.get("error"),
+                )
+                return self._send(200, _json_bytes({"ok": True}), "application/json; charset=utf-8")
+            return self._send(404, b"Not Found", "text/plain")
+
         if not self._require_auth():
             return
         if getattr(self, "_auth_role", "") != "admin":
@@ -981,6 +1294,57 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/banners_delete":
             delete_banner(int(data.get("id") or 0))
+            return self._send(200, _json_bytes({"ok": True}), "application/json; charset=utf-8")
+
+        if path == "/api/video_create":
+            sdt = (data.get("published_at") or "").strip()
+            dt = None
+            if sdt:
+                try:
+                    dt = datetime.fromisoformat(sdt.replace("Z", "+00:00"))
+                    dt = dt.replace(tzinfo=None)
+                except Exception:
+                    dt = None
+            vid = admin_create_video_job(
+                local_filename=(data.get("local_filename") or "").strip(),
+                caption=(data.get("caption") or "").strip(),
+                cover_url=(data.get("cover_url") or "").strip(),
+                tags=(data.get("tags") or "").strip(),
+                category_id=int(data.get("category_id") or 0),
+                sort_order=int(data.get("sort_order") or 0),
+                is_published=bool(data.get("is_published")),
+                published_at=dt,
+            )
+            return self._send(200, _json_bytes({"ok": True, "id": vid}), "application/json; charset=utf-8")
+
+        if path == "/api/video_update":
+            sdt = (data.get("published_at") or "").strip()
+            dt = None
+            if sdt:
+                try:
+                    dt = datetime.fromisoformat(sdt.replace("Z", "+00:00"))
+                    dt = dt.replace(tzinfo=None)
+                except Exception:
+                    dt = None
+            admin_update_video_meta(
+                video_id=int(data.get("id") or 0),
+                caption=(data.get("caption") or "").strip(),
+                cover_url=(data.get("cover_url") or "").strip(),
+                tags=(data.get("tags") or "").strip(),
+                category_id=int(data.get("category_id") or 0),
+                sort_order=int(data.get("sort_order") or 0),
+                is_published=bool(data.get("is_published")),
+                published_at=dt,
+                local_filename=(data.get("local_filename") or "").strip(),
+            )
+            return self._send(200, _json_bytes({"ok": True}), "application/json; charset=utf-8")
+
+        if path == "/api/video_publish":
+            admin_set_video_publish(int(data.get("id") or 0), bool(data.get("is_published")))
+            return self._send(200, _json_bytes({"ok": True}), "application/json; charset=utf-8")
+
+        if path == "/api/video_sort":
+            admin_set_video_sort(int(data.get("id") or 0), int(data.get("sort_order") or 0))
             return self._send(200, _json_bytes({"ok": True}), "application/json; charset=utf-8")
 
         if path == "/api/user_extend":
@@ -1138,7 +1502,7 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
-def list_videos(q: str, page: int, limit: int, category_id: int = 0, sort: str = "latest") -> dict:
+def list_videos(q: str, page: int, limit: int, category_id: int = 0, sort: str = "latest", include_unpublished: bool = False) -> dict:
     page = max(1, page)
     limit = max(1, min(limit, 100))
     offset = (page - 1) * limit
@@ -1148,20 +1512,25 @@ def list_videos(q: str, page: int, limit: int, category_id: int = 0, sort: str =
         cur = conn.cursor(dictionary=True)
         where_clauses = ["1=1"]
         params = []
-        
+
         if q:
             where_clauses.append("caption LIKE %s")
             params.append(f"%{q}%")
-        
+
         if category_id > 0:
             where_clauses.append("category_id = %s")
             params.append(category_id)
+
+        if not include_unpublished:
+            where_clauses.append("upload_status='done'")
+            where_clauses.append("is_published=1")
+            where_clauses.append("(published_at IS NULL OR published_at <= UTC_TIMESTAMP())")
             
         where_str = " AND ".join(where_clauses)
         
-        order_by = "created_at DESC"
+        order_by = "sort_order DESC, published_at DESC, created_at DESC"
         if sort == "hot":
-            order_by = "view_count DESC, created_at DESC"
+            order_by = "view_count DESC, sort_order DESC, published_at DESC, created_at DESC"
         
         # Get count
         cur.execute(f"SELECT COUNT(*) as cnt FROM videos WHERE {where_str}", tuple(params))
@@ -1301,14 +1670,57 @@ def stats() -> dict:
 def list_users(q: str, limit: int) -> list[dict]:
     limit = max(1, min(int(limit), 200))
     if not q:
-        sql = "SELECT telegram_id, username, paid_until, total_received, wallet_addr, created_at FROM users ORDER BY created_at DESC LIMIT %s"
+        sql = """
+            SELECT
+              u.telegram_id,
+              u.username,
+              u.created_at,
+              u.paid_until,
+              (u.paid_until IS NOT NULL AND u.paid_until > UTC_TIMESTAMP()) AS is_member,
+              (SELECT MIN(o.created_at) FROM orders o WHERE o.telegram_id=u.telegram_id AND o.status='success') AS member_since,
+              u.last_plan,
+              u.total_received,
+              u.wallet_addr
+            FROM users u
+            ORDER BY u.created_at DESC
+            LIMIT %s
+        """
         return _q_all(sql, (limit,))
 
     if q.isdigit():
-        sql = "SELECT telegram_id, username, paid_until, total_received, wallet_addr, created_at FROM users WHERE telegram_id=%s LIMIT %s"
+        sql = """
+            SELECT
+              u.telegram_id,
+              u.username,
+              u.created_at,
+              u.paid_until,
+              (u.paid_until IS NOT NULL AND u.paid_until > UTC_TIMESTAMP()) AS is_member,
+              (SELECT MIN(o.created_at) FROM orders o WHERE o.telegram_id=u.telegram_id AND o.status='success') AS member_since,
+              u.last_plan,
+              u.total_received,
+              u.wallet_addr
+            FROM users u
+            WHERE u.telegram_id=%s
+            LIMIT %s
+        """
         return _q_all(sql, (int(q), limit))
 
-    sql = "SELECT telegram_id, username, paid_until, total_received, wallet_addr, created_at FROM users WHERE username LIKE %s ORDER BY created_at DESC LIMIT %s"
+    sql = """
+        SELECT
+          u.telegram_id,
+          u.username,
+          u.created_at,
+          u.paid_until,
+          (u.paid_until IS NOT NULL AND u.paid_until > UTC_TIMESTAMP()) AS is_member,
+          (SELECT MIN(o.created_at) FROM orders o WHERE o.telegram_id=u.telegram_id AND o.status='success') AS member_since,
+          u.last_plan,
+          u.total_received,
+          u.wallet_addr
+        FROM users u
+        WHERE u.username LIKE %s
+        ORDER BY u.created_at DESC
+        LIMIT %s
+    """
     return _q_all(sql, (f"%{q}%", limit))
 
 
@@ -1984,7 +2396,12 @@ def user_detail(telegram_id: int) -> dict:
         """,
         (telegram_id,),
     )
-    return {"user": user, "orders": orders, "txs": txs}
+    viewed_tags = []
+    try:
+        viewed_tags = user_viewed_tags(telegram_id)
+    except Exception:
+        viewed_tags = []
+    return {"user": user, "orders": orders, "txs": txs, "viewed_tags": viewed_tags}
 
 
 def user_extend_days(telegram_id: int, days: int, actor: str, note: str, ip: str) -> str | None:

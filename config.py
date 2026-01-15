@@ -328,6 +328,8 @@ ADMIN_WEB_ACTIONS_ENABLE = _to_bool(_cfg_value("ADMIN_WEB_ACTIONS_ENABLE", "1"),
 # Example: https://your-domain.com/webapp/
 WEBAPP_URL = str(_cfg_value("WEBAPP_URL", "") or "").strip()
 
+LOCAL_UPLOADER_TOKEN = str(_cfg_value("LOCAL_UPLOADER_TOKEN", "") or "").strip()
+
 # 广播（admin_web）
 BROADCAST_SLEEP_SEC = _to_float(_cfg_value("BROADCAST_SLEEP_SEC", "0.15"), 0.15)
 BROADCAST_ABORT_MIN_SENT = _to_int(_cfg_value("BROADCAST_ABORT_MIN_SENT", "50"), 50)

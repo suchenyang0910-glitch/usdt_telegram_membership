@@ -607,7 +607,7 @@ def main():
     heartbeat_map = _parse_heartbeat_map(_env("WATCHDOG_HEARTBEAT_MAP", ""))
     if mode == "docker":
         compose_dir = _env("WATCHDOG_DOCKER_COMPOSE_DIR", "/opt/pvbot/usdt_telegram_membership/deploy")
-        services = [x.strip() for x in _env("WATCHDOG_DOCKER_SERVICES", "app,mysql,userbot").split(",") if x.strip()]
+        services = [x.strip() for x in _env("WATCHDOG_DOCKER_SERVICES", "app,mysql").split(",") if x.strip()]
         _docker_check_and_fix(compose_dir, services, heartbeat_map, project_dir, max_age_sec)
         return
 

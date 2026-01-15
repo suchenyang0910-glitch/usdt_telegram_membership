@@ -241,10 +241,32 @@ def init_tables():
     _ensure_column(cur, "videos", "free_channel_id", "free_channel_id BIGINT NULL")
     _ensure_column(cur, "videos", "free_message_id", "free_message_id BIGINT NULL")
     _ensure_column(cur, "videos", "is_hot", "is_hot TINYINT DEFAULT 0")
+    _ensure_column(cur, "videos", "cover_url", "cover_url VARCHAR(512) NULL")
+    _ensure_column(cur, "videos", "tags", "tags VARCHAR(512) NULL")
+    _ensure_column(cur, "videos", "is_published", "is_published TINYINT DEFAULT 1")
+    _ensure_column(cur, "videos", "sort_order", "sort_order INT DEFAULT 0")
+    _ensure_column(cur, "videos", "published_at", "published_at DATETIME NULL")
+    _ensure_column(cur, "videos", "upload_status", "upload_status VARCHAR(16) DEFAULT 'done'")
+    _ensure_column(cur, "videos", "local_filename", "local_filename VARCHAR(256) NULL")
+    _ensure_column(cur, "videos", "error_message", "error_message VARCHAR(256) NULL")
     _ensure_index(cur, "videos", "idx_videos_channel_msg", "channel_id, message_id")
     _ensure_index(cur, "videos", "idx_videos_created", "created_at")
     _ensure_index(cur, "videos", "idx_videos_view_count", "view_count")
     _ensure_index(cur, "videos", "idx_videos_category", "category_id")
+    _ensure_index(cur, "videos", "idx_videos_publish_sort", "is_published, sort_order, published_at")
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS video_views (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            telegram_id BIGINT NOT NULL,
+            video_id BIGINT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+    )
+    _ensure_index(cur, "video_views", "idx_video_views_user_time", "telegram_id, created_at")
+    _ensure_index(cur, "video_views", "idx_video_views_video_time", "video_id, created_at")
 
     cur.execute(
         """
@@ -1151,5 +1173,198 @@ def set_video_category(video_id: int, category_id: int):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("UPDATE videos SET category_id=%s WHERE id=%s", (int(category_id), int(video_id)))
+    cur.close()
+    conn.close()
+
+
+def record_video_view(telegram_id: int, video_id: int):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO video_views (telegram_id, video_id) VALUES (%s,%s)",
+        (int(telegram_id), int(video_id)),
+    )
+    cur.close()
+    conn.close()
+
+
+def user_viewed_tags(telegram_id: int, limit: int = 200) -> list[dict]:
+    limit = max(1, min(int(limit or 200), 2000))
+    conn = get_conn()
+    cur = conn.cursor(dictionary=True)
+    cur.execute(
+        """
+        SELECT v.tags
+        FROM video_views vv
+        JOIN videos v ON v.id = vv.video_id
+        WHERE vv.telegram_id=%s
+        ORDER BY vv.created_at DESC
+        LIMIT %s
+        """,
+        (int(telegram_id), limit),
+    )
+    rows = cur.fetchall() or []
+    cur.close()
+    conn.close()
+    counts: dict[str, int] = {}
+    for r in rows:
+        tags = (r.get("tags") or "").strip()
+        if not tags:
+            continue
+        for t in tags.replace("，", ",").split(","):
+            tt = (t or "").strip()
+            if not tt:
+                continue
+            counts[tt] = counts.get(tt, 0) + 1
+    out = [{"tag": k, "count": v} for k, v in counts.items()]
+    out.sort(key=lambda x: (-int(x.get("count") or 0), str(x.get("tag") or "")))
+    return out[:50]
+
+
+def admin_create_video_job(local_filename: str, caption: str, cover_url: str, tags: str, category_id: int, sort_order: int, is_published: bool, published_at: datetime | None) -> int:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO videos (channel_id, message_id, file_id, caption, view_count, category_id, cover_url, tags, is_published, sort_order, published_at, upload_status, local_filename)
+        VALUES (NULL, NULL, NULL, %s, 0, %s, %s, %s, %s, %s, %s, 'pending', %s)
+        """,
+        (
+            caption or "",
+            int(category_id or 0),
+            (cover_url or "").strip()[:512] or None,
+            (tags or "").strip()[:512] or None,
+            1 if bool(is_published) else 0,
+            int(sort_order or 0),
+            published_at,
+            (local_filename or "").strip()[:256] or None,
+        ),
+    )
+    vid = int(cur.lastrowid or 0)
+    cur.close()
+    conn.close()
+    return vid
+
+
+def admin_update_video_meta(video_id: int, caption: str, cover_url: str, tags: str, category_id: int, sort_order: int, is_published: bool, published_at: datetime | None, local_filename: str):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE videos
+        SET caption=%s, cover_url=%s, tags=%s, category_id=%s, sort_order=%s, is_published=%s, published_at=%s, local_filename=%s
+        WHERE id=%s
+        """,
+        (
+            caption or "",
+            (cover_url or "").strip()[:512] or None,
+            (tags or "").strip()[:512] or None,
+            int(category_id or 0),
+            int(sort_order or 0),
+            1 if bool(is_published) else 0,
+            published_at,
+            (local_filename or "").strip()[:256] or None,
+            int(video_id),
+        ),
+    )
+    cur.close()
+    conn.close()
+
+
+def admin_set_video_publish(video_id: int, is_published: bool):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE videos SET is_published=%s WHERE id=%s", (1 if bool(is_published) else 0, int(video_id)))
+    cur.close()
+    conn.close()
+
+
+def admin_set_video_sort(video_id: int, sort_order: int):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE videos SET sort_order=%s WHERE id=%s", (int(sort_order or 0), int(video_id)))
+    cur.close()
+    conn.close()
+
+
+def list_videos_admin(q: str, limit: int = 200, status: str | None = None) -> list[dict]:
+    limit = max(1, min(int(limit or 200), 2000))
+    qq = (q or "").strip()
+    st = (status or "").strip().lower()
+    where = ["1=1"]
+    params: list = []
+    if qq:
+        where.append("caption LIKE %s")
+        params.append(f"%{qq}%")
+    if st in ("pending", "uploading", "done", "failed"):
+        where.append("upload_status=%s")
+        params.append(st)
+    sql = f"""
+        SELECT id, caption, cover_url, tags, category_id, sort_order, is_published, published_at, upload_status, local_filename,
+               channel_id, message_id, free_channel_id, free_message_id, view_count, created_at
+        FROM videos
+        WHERE {' AND '.join(where)}
+        ORDER BY sort_order DESC, published_at DESC, created_at DESC
+        LIMIT %s
+    """
+    params.append(limit)
+    conn = get_conn()
+    cur = conn.cursor(dictionary=True)
+    cur.execute(sql, tuple(params))
+    rows = cur.fetchall() or []
+    cur.close()
+    conn.close()
+    return rows
+
+
+def local_uploader_claim_next() -> dict | None:
+    conn = get_conn()
+    cur = conn.cursor(dictionary=True)
+    cur.execute("SELECT * FROM videos WHERE upload_status='pending' ORDER BY created_at ASC LIMIT 1")
+    row = cur.fetchone()
+    if not row:
+        cur.close()
+        conn.close()
+        return None
+    vid = int(row.get("id") or 0)
+    cur2 = conn.cursor()
+    cur2.execute("UPDATE videos SET upload_status='uploading' WHERE id=%s AND upload_status='pending'", (vid,))
+    ok = cur2.rowcount == 1
+    cur2.close()
+    cur.close()
+    conn.close()
+    return row if ok else None
+
+
+def local_uploader_update(video_id: int, upload_status: str, channel_id: int | None, message_id: int | None, free_channel_id: int | None, free_message_id: int | None, file_id: str | None, error: str | None):
+    st = (upload_status or "").strip().lower()
+    if st not in ("pending", "uploading", "done", "failed"):
+        st = "failed"
+    conn = get_conn()
+    cur = conn.cursor()
+    sets = ["upload_status=%s"]
+    params: list = [st]
+    if channel_id is not None:
+        sets.append("channel_id=%s")
+        params.append(int(channel_id))
+    if message_id is not None:
+        sets.append("message_id=%s")
+        params.append(int(message_id))
+    if free_channel_id is not None:
+        sets.append("free_channel_id=%s")
+        params.append(int(free_channel_id))
+    if free_message_id is not None:
+        sets.append("free_message_id=%s")
+        params.append(int(free_message_id))
+    if file_id is not None:
+        sets.append("file_id=%s")
+        params.append((file_id or "")[:128] or None)
+    if st == "done":
+        sets.append("published_at=IF(published_at IS NULL, UTC_TIMESTAMP(), published_at)")
+    if error is not None:
+        sets.append("error_message=%s")
+        params.append((error or "")[:256] or None)
+    params.append(int(video_id))
+    cur.execute(f"UPDATE videos SET {', '.join(sets)} WHERE id=%s", tuple(params))
     cur.close()
     conn.close()

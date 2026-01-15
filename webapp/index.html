@@ -222,6 +222,9 @@
 
             // Click handler
             div.onclick = () => {
+                try {
+                    fetch(`${API_BASE}/track_view?video_id=${encodeURIComponent(v.id)}`, { headers });
+                } catch (e) {}
                 if (v.is_locked) {
                     // If locked, maybe show preview (free link) or prompt upgrade
                     if (v.free_link) {
