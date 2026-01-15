@@ -141,7 +141,10 @@ def _parse_allow_ips(raw: str) -> list[ipaddress._BaseNetwork]:
             if "/" in part:
                 out.append(ipaddress.ip_network(part, strict=False))
             else:
-                out.append(ipaddress.ip_network(part + "/32", strict=False))
+                if ":" in part:
+                    out.append(ipaddress.ip_network(part + "/128", strict=False))
+                else:
+                    out.append(ipaddress.ip_network(part + "/32", strict=False))
         except Exception:
             continue
     return out
