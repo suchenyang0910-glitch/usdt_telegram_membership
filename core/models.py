@@ -32,6 +32,29 @@ def _ensure_index(cur, table: str, index_name: str, columns_sql: str):
         return
     cur.execute(f"CREATE INDEX {index_name} ON {table} ({columns_sql})")
 
+def _column_exists(cur, table: str, column_name: str) -> bool:
+    cur.execute(
+        """
+        SELECT COUNT(1)
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = %s
+          AND COLUMN_NAME = %s
+        """,
+        (table, column_name),
+    )
+    row = cur.fetchone()
+    try:
+        return int(row[0] or 0) > 0
+    except Exception:
+        return False
+
+
+def _ensure_column(cur, table: str, column_name: str, column_sql: str):
+    if _column_exists(cur, table, column_name):
+        return
+    cur.execute(f"ALTER TABLE {table} ADD COLUMN {column_sql}")
+
 
 def init_tables():
     conn = get_conn()
@@ -214,6 +237,10 @@ def init_tables():
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """
     )
+    _ensure_column(cur, "videos", "category_id", "category_id INT DEFAULT 0")
+    _ensure_column(cur, "videos", "free_channel_id", "free_channel_id BIGINT NULL")
+    _ensure_column(cur, "videos", "free_message_id", "free_message_id BIGINT NULL")
+    _ensure_column(cur, "videos", "is_hot", "is_hot TINYINT DEFAULT 0")
     _ensure_index(cur, "videos", "idx_videos_channel_msg", "channel_id, message_id")
     _ensure_index(cur, "videos", "idx_videos_created", "created_at")
     _ensure_index(cur, "videos", "idx_videos_view_count", "view_count")
