@@ -9,6 +9,29 @@ from core.db import get_conn
 def _utc_now() -> datetime:
     return datetime.utcnow()
 
+def _index_exists(cur, table: str, index_name: str) -> bool:
+    cur.execute(
+        """
+        SELECT COUNT(1)
+        FROM INFORMATION_SCHEMA.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = %s
+          AND INDEX_NAME = %s
+        """,
+        (table, index_name),
+    )
+    row = cur.fetchone()
+    try:
+        return int(row[0] or 0) > 0
+    except Exception:
+        return False
+
+
+def _ensure_index(cur, table: str, index_name: str, columns_sql: str):
+    if _index_exists(cur, table, index_name):
+        return
+    cur.execute(f"CREATE INDEX {index_name} ON {table} ({columns_sql})")
+
 
 def init_tables():
     conn = get_conn()
@@ -54,7 +77,7 @@ def init_tables():
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """
     )
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_address_pool_assigned_to ON address_pool (assigned_to)")
+    _ensure_index(cur, "address_pool", "idx_address_pool_assigned_to", "assigned_to")
 
     cur.execute(
         """
@@ -74,9 +97,9 @@ def init_tables():
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """
     )
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_addr_status ON orders (addr, status)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_telegram_created ON orders (telegram_id, created_at)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_status_created ON orders (status, created_at)")
+    _ensure_index(cur, "orders", "idx_orders_addr_status", "addr, status")
+    _ensure_index(cur, "orders", "idx_orders_telegram_created", "telegram_id, created_at")
+    _ensure_index(cur, "orders", "idx_orders_status_created", "status, created_at")
 
     cur.execute(
         """
@@ -95,9 +118,9 @@ def init_tables():
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """
     )
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_usdt_txs_addr_created ON usdt_txs (addr, created_at)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_usdt_txs_status_created ON usdt_txs (status, created_at)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_usdt_txs_telegram_created ON usdt_txs (telegram_id, created_at)")
+    _ensure_index(cur, "usdt_txs", "idx_usdt_txs_addr_created", "addr, created_at")
+    _ensure_index(cur, "usdt_txs", "idx_usdt_txs_status_created", "status, created_at")
+    _ensure_index(cur, "usdt_txs", "idx_usdt_txs_telegram_created", "telegram_id, created_at")
 
     cur.execute(
         """
@@ -191,10 +214,10 @@ def init_tables():
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """
     )
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_videos_channel_msg ON videos (channel_id, message_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_videos_created ON videos (created_at)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_videos_view_count ON videos (view_count)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_videos_category ON videos (category_id)")
+    _ensure_index(cur, "videos", "idx_videos_channel_msg", "channel_id, message_id")
+    _ensure_index(cur, "videos", "idx_videos_created", "created_at")
+    _ensure_index(cur, "videos", "idx_videos_view_count", "view_count")
+    _ensure_index(cur, "videos", "idx_videos_category", "category_id")
 
     cur.execute(
         """
