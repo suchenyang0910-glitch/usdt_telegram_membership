@@ -281,12 +281,16 @@ async def support_user_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if not msg.text:
         try:
-            await context.bot.copy_message(
+            copied = await context.bot.copy_message(
                 chat_id=SUPPORT_GROUP_ID,
                 from_chat_id=msg.chat_id,
                 message_id=msg.message_id,
                 reply_to_message_id=ticket.message_id,
             )
+            try:
+                support_store_mapping(SUPPORT_GROUP_ID, int(copied.message_id), int(user.id), int(msg.message_id))
+            except Exception:
+                pass
         except Exception:
             return
 
@@ -303,6 +307,13 @@ async def support_group_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     reply_to_id = msg.reply_to_message.message_id
     user_id = support_get_user_id(SUPPORT_GROUP_ID, reply_to_id)
+    if not user_id:
+        try:
+            parent = getattr(msg.reply_to_message, "reply_to_message", None)
+            if parent:
+                user_id = support_get_user_id(SUPPORT_GROUP_ID, int(parent.message_id))
+        except Exception:
+            user_id = None
     if not user_id:
         return
 
