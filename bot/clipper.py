@@ -23,7 +23,7 @@ from config import (
 )
 from bot.captions import compose_free_caption
 from bot.admin_report import send_admin_text
-from core.models import claim_clip_dispatch, mark_clip_dispatch_sent, unclaim_clip_dispatch
+from core.models import claim_clip_dispatch_takeover, mark_clip_dispatch_sent, unclaim_clip_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +187,7 @@ async def private_channel_video_handler(update: Update, context: ContextTypes.DE
         last_err = None
         for i in range(SEND_RETRY):
             try:
-                if not claim_clip_dispatch(PAID_CHANNEL_ID, int(message.message_id), int(ch), "bot"):
+                if not claim_clip_dispatch_takeover(PAID_CHANNEL_ID, int(message.message_id), int(ch), "bot", 600):
                     break
                 with open(dst, "rb") as f:
                     await context.bot.send_video(chat_id=ch, video=f, caption=caption)

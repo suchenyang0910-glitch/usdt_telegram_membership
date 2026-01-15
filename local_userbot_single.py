@@ -114,6 +114,39 @@ def _now_local() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _pick_latest_file(folder: str, after_ts: float) -> str | None:
+    best = None
+    best_m = 0.0
+    try:
+        for name in os.listdir(folder):
+            fp = os.path.join(folder, name)
+            if not os.path.isfile(fp):
+                continue
+            try:
+                m = os.path.getmtime(fp)
+            except Exception:
+                continue
+            if m < after_ts:
+                continue
+            if m >= best_m:
+                best_m = m
+                best = fp
+    except Exception:
+        return None
+    return best
+
+
+def _normalize_download_result(fp, folder: str, after_ts: float) -> str | None:
+    if isinstance(fp, (list, tuple)):
+        fp = fp[0] if fp else None
+    if isinstance(fp, str) and fp and os.path.isfile(fp):
+        return fp
+    alt = _pick_latest_file(folder, after_ts)
+    if alt and os.path.isfile(alt):
+        return alt
+    return None
+
+
 async def _download_media_with_timeouts(
     client: TelegramClient,
     msg,
@@ -312,10 +345,12 @@ async def _scan_groups(client: TelegramClient, s: Settings) -> list[tuple[int, l
     return out
 
 
-async def _download_group(client: TelegramClient, s: Settings, group_id: int, items: list, state: dict) -> bool:
+async def _download_group(client: TelegramClient, s: Settings, group_id: int, items: list, state_lock: asyncio.Lock) -> bool:
     ids = [int(getattr(x, "id", 0) or 0) for x in items if int(getattr(x, "id", 0) or 0)]
-    downloaded = set(int(x) for x in (state.get("downloaded_message_ids") or []))
-    if ids and all(mid in downloaded for mid in ids):
+    async with state_lock:
+        state0 = _state_get(s.state_file)
+    downloaded0 = set(int(x) for x in (state0.get("downloaded_message_ids") or []))
+    if ids and all(mid in downloaded0 for mid in ids):
         return True
 
     dt = getattr(items[0], "date", None) or datetime.now(timezone.utc)
@@ -352,8 +387,9 @@ async def _download_group(client: TelegramClient, s: Settings, group_id: int, it
             if s.download_max_attempts and attempts > int(s.download_max_attempts):
                 return False
             try:
+                started_ts = time.time()
                 print(f"[{_now_local()}] download msg_id={msg_id} size={expect/1024/1024:.1f}MB attempt={attempts}")
-                fp = await _download_media_with_timeouts(
+                fp_raw = await _download_media_with_timeouts(
                     client,
                     m,
                     folder,
@@ -362,27 +398,28 @@ async def _download_group(client: TelegramClient, s: Settings, group_id: int, it
                     s.min_download_kbps,
                     s.max_download_timeout_sec,
                 )
-                if expect > 0 and fp and os.path.exists(fp):
+                fp = _normalize_download_result(fp_raw, folder, started_ts)
+                if expect > 0 and fp and os.path.isfile(fp):
                     try:
                         got = int(os.path.getsize(fp) or 0)
                     except Exception:
                         got = 0
-                    if got > 0 and got < int(expect):
+                    if got <= 0 or got != int(expect):
                         try:
                             os.remove(fp)
                         except Exception:
                             pass
-                        time.sleep(min(60, 5 * attempts))
+                        await asyncio.sleep(min(60, 5 * attempts))
                         continue
                 break
             except FileReferenceExpiredError:
-                time.sleep(min(60, 5 * attempts))
+                await asyncio.sleep(min(60, 5 * attempts))
                 continue
             except asyncio.TimeoutError:
-                time.sleep(min(60, 5 * attempts))
+                await asyncio.sleep(min(60, 5 * attempts))
                 continue
             except Exception:
-                time.sleep(min(60, 5 * attempts))
+                await asyncio.sleep(min(60, 5 * attempts))
                 continue
 
     imgs, vids = _list_media_files(folder)
@@ -394,15 +431,18 @@ async def _download_group(client: TelegramClient, s: Settings, group_id: int, it
         if not ok:
             return False
 
-    for mid in ids:
-        downloaded.add(int(mid))
-    state["downloaded_message_ids"] = sorted(list(downloaded))
-    gf = state.get("group_folder") or {}
-    if not isinstance(gf, dict):
-        gf = {}
-    gf[str(int(group_id))] = folder
-    state["group_folder"] = gf
-    _state_save(s.state_file, state)
+    async with state_lock:
+        state = _state_get(s.state_file)
+        downloaded = set(int(x) for x in (state.get("downloaded_message_ids") or []))
+        for mid in ids:
+            downloaded.add(int(mid))
+        state["downloaded_message_ids"] = sorted(list(downloaded))
+        gf = state.get("group_folder") or {}
+        if not isinstance(gf, dict):
+            gf = {}
+        gf[str(int(group_id))] = folder
+        state["group_folder"] = gf
+        _state_save(s.state_file, state)
     return True
 
 
@@ -416,8 +456,9 @@ def _next_half_hour_sleep() -> float:
     return max(1.0, (nxt - now).total_seconds())
 
 
-async def _upload_one_completed_folder(client: TelegramClient, s: Settings):
-    state = _state_get(s.state_file)
+async def _upload_one_completed_folder(client: TelegramClient, s: Settings, state_lock: asyncio.Lock):
+    async with state_lock:
+        state = _state_get(s.state_file)
     uploaded = set(int(x) for x in (state.get("uploaded_group_ids") or []))
     gf = state.get("group_folder") or {}
     if not isinstance(gf, dict):
@@ -476,9 +517,16 @@ async def _upload_one_completed_folder(client: TelegramClient, s: Settings):
     except Exception:
         pass
 
-    uploaded.add(int(gid))
-    state["uploaded_group_ids"] = sorted(list(uploaded))
-    _state_save(s.state_file, state)
+    async with state_lock:
+        state2 = _state_get(s.state_file)
+        uploaded2 = set(int(x) for x in (state2.get("uploaded_group_ids") or []))
+        uploaded2.add(int(gid))
+        state2["uploaded_group_ids"] = sorted(list(uploaded2))
+        gf2 = state2.get("group_folder") or {}
+        if isinstance(gf2, dict):
+            gf2.pop(str(int(gid)), None)
+            state2["group_folder"] = gf2
+        _state_save(s.state_file, state2)
 
 
 async def run_forever():
@@ -495,9 +543,11 @@ async def run_forever():
         print(f"lookback_days={s.lookback_days} poll_minutes={s.poll_minutes} download_concurrency={s.download_concurrency}")
         print(f"root={s.root}")
         sem = asyncio.Semaphore(int(s.download_concurrency))
+        state_lock = asyncio.Lock()
 
         async def download_tick():
-            state = _state_get(s.state_file)
+            async with state_lock:
+                state = _state_get(s.state_file)
             downloaded = set(int(x) for x in (state.get("downloaded_message_ids") or []))
             groups = await _scan_groups(client, s)
             tasks: list[asyncio.Task] = []
@@ -505,7 +555,7 @@ async def run_forever():
             async def _one(gid: int, items: list):
                 async with sem:
                     try:
-                        await _download_group(client, s, gid, items, state)
+                        await _download_group(client, s, gid, items, state_lock)
                     except Exception:
                         return
 
@@ -533,7 +583,7 @@ async def run_forever():
                 except asyncio.CancelledError:
                     return
                 try:
-                    await _upload_one_completed_folder(client, s)
+                    await _upload_one_completed_folder(client, s, state_lock)
                 except Exception:
                     continue
 

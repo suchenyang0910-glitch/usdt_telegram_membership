@@ -1164,6 +1164,71 @@ def claim_clip_dispatch(source_chat_id: int, source_msg_id: int, target_chat_id:
     return ok
 
 
+def claim_clip_dispatch_takeover(
+    source_chat_id: int, source_msg_id: int, target_chat_id: int, origin: str, takeover_after_sec: int = 600
+) -> bool:
+    takeover_after_sec = int(takeover_after_sec or 0)
+    if takeover_after_sec < 0:
+        takeover_after_sec = 0
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            INSERT IGNORE INTO clip_dispatch (source_chat_id, source_msg_id, target_chat_id, origin, status)
+            VALUES (%s, %s, %s, %s, 'sending')
+            """,
+            (int(source_chat_id), int(source_msg_id), int(target_chat_id), (origin or "")[:32]),
+        )
+        if int(cur.rowcount or 0) == 1:
+            conn.commit()
+            cur.close()
+            return True
+
+        cur.execute(
+            """
+            SELECT status,
+                   GREATEST(
+                       IFNULL(TIMESTAMPDIFF(SECOND, updated_at, UTC_TIMESTAMP()), 0),
+                       IFNULL(TIMESTAMPDIFF(SECOND, created_at, UTC_TIMESTAMP()), 0)
+                   ) AS age_sec
+            FROM clip_dispatch
+            WHERE source_chat_id=%s AND source_msg_id=%s AND target_chat_id=%s
+            LIMIT 1
+            """,
+            (int(source_chat_id), int(source_msg_id), int(target_chat_id)),
+        )
+        row = cur.fetchone() or {}
+        status = str((row.get("status") or "")).strip().lower()
+        age_sec = int(row.get("age_sec") or 0)
+
+        if status == "sent":
+            conn.commit()
+            cur.close()
+            return False
+
+        if takeover_after_sec and age_sec >= takeover_after_sec:
+            cur.execute(
+                """
+                UPDATE clip_dispatch
+                SET origin=%s, status='sending'
+                WHERE source_chat_id=%s AND source_msg_id=%s AND target_chat_id=%s
+                """,
+                ((origin or "")[:32], int(source_chat_id), int(source_msg_id), int(target_chat_id)),
+            )
+            ok = int(cur.rowcount or 0) == 1
+            conn.commit()
+            cur.close()
+            return ok
+
+        conn.commit()
+        cur.close()
+        return False
+    finally:
+        conn.close()
+
+
 def mark_clip_dispatch_sent(source_chat_id: int, source_msg_id: int, target_chat_id: int):
     conn = get_conn(); cur = conn.cursor()
     cur.execute(

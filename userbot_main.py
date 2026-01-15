@@ -27,7 +27,7 @@ from config import (
     USERBOT_SESSION_NAME,
     USERBOT_STRING_SESSION,
 )
-from core.models import claim_clip_dispatch, mark_clip_dispatch_sent, unclaim_clip_dispatch
+from core.models import claim_clip_dispatch_takeover, mark_clip_dispatch_sent, unclaim_clip_dispatch
 
 
 def _targets() -> list[int]:
@@ -232,7 +232,11 @@ async def _process_video_message(client: TelegramClient, msg, caption_src: str):
     sent = 0
     for ch in targets:
         try:
-            if not claim_clip_dispatch(PAID_CHANNEL_ID, int(msg.id), int(ch), "userbot"):
+            if not claim_clip_dispatch_takeover(PAID_CHANNEL_ID, int(msg.id), int(ch), "userbot", 600):
+                await _notify(
+                    client,
+                    f"<b>跳过发送</b>\nmsg_id=<code>{msg.id}</code>\ntarget=<code>{ch}</code>\n原因：已发送或仍在发送中",
+                )
                 continue
             await client.send_file(ch, dst, caption=caption, supports_streaming=True)
             mark_clip_dispatch_sent(PAID_CHANNEL_ID, int(msg.id), int(ch))
@@ -288,6 +292,7 @@ async def main():
 
     async with client:
         me = await client.get_me()
+        await _notify(client, f"<b>转发目标</b>\n{_clip_targets()}")
         await _notify(
             client,
             f"<b>userbot 已启动</b>\nuser_id=<code>{me.id}</code>\n监听频道：<code>{PAID_CHANNEL_ID}</code>",
