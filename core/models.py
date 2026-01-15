@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from config import AMOUNT_EPS, PLANS
+from config import AMOUNT_EPS, MATCH_ORDER_LOOKBACK_HOURS, MATCH_ORDER_PREFER_RECENT, PLANS
 from core.db import get_conn
 
 
@@ -666,6 +666,17 @@ def match_pending_order_by_amount_v2(*, addr: str, amount: Decimal, eps: Decimal
         if abs(oa - a) <= e:
             return r
     return None
+
+
+def match_pending_order_by_amount(addr: str, amount: Decimal, eps: Decimal | None = None, tx_time: datetime | None = None) -> dict | None:
+    return match_pending_order_by_amount_v2(
+        addr=addr,
+        amount=amount,
+        eps=eps if eps is not None else AMOUNT_EPS,
+        tx_time=tx_time,
+        lookback_hours=int(MATCH_ORDER_LOOKBACK_HOURS),
+        prefer_recent=bool(MATCH_ORDER_PREFER_RECENT),
+    )
 
 
 def set_usdt_tx_status(tx_id: str, status: str, plan_code: str | None = None, credited_amount: Decimal | None = None, processed_at: datetime | None = None, telegram_id: int | None = None):
