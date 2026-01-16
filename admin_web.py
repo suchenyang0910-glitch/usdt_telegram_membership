@@ -474,12 +474,14 @@ INDEX_HTML = """<!doctype html>
           <div class="muted">视频上传（创建上传任务，本地 userbot 拉取并上传到频道后回填链接）</div>
           <div class="row" style="margin-top:10px">
             <input id="vLocal" placeholder="本地文件名（local userbot 识别）" style="min-width:320px" />
+            <input id="vVideoFile" type="file" accept="video/*" style="min-width:320px" onchange="useSelectedVideoName()" />
             <select id="vCategorySel" style="min-width:220px;padding:10px;border-radius:10px;border:1px solid #ccc">
               <option value="0">请选择分类</option>
             </select>
             <input id="vSort" placeholder="排序(越大越靠前)" style="min-width:160px" />
             <label class="muted"><input id="vPub" type="checkbox" checked /> 上架</label>
           </div>
+          <div class="muted" style="margin-top:6px">说明：这里不会把视频上传到服务器，只会读取文件名。请把视频文件放到本地 userbot 的 LOCAL_UPLOADER_DIR 目录下。</div>
           <div class="row" style="margin-top:10px">
             <input id="vCover" placeholder="展示图片URL(可选)" style="min-width:420px" />
             <input id="vCoverFile" type="file" accept="image/*" style="min-width:260px" />
@@ -920,6 +922,13 @@ async function uploadBannerImage(){
 async function uploadCoverImage(){
   const r = await uploadImageFromInput("vCoverFile", "covers");
   if(r && r.url) document.getElementById("vCover").value = r.url;
+}
+
+function useSelectedVideoName(){
+  const el = document.getElementById("vVideoFile");
+  const f = el && el.files && el.files[0] ? el.files[0] : null;
+  if(!f) return;
+  document.getElementById("vLocal").value = f.name || "";
 }
 
 async function loadVideosAdmin(){
