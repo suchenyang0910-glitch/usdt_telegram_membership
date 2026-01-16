@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import mimetypes
+import cgi
 import os
 import secrets
 import socket
@@ -211,6 +212,30 @@ def _html_escape(s: str) -> str:
     )
 
 
+def _uploads_dir() -> str:
+    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp", "uploads")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
+def _safe_join(base_dir: str, rel: str) -> str | None:
+    rel = (rel or "").lstrip("/")
+    if not rel or ".." in rel:
+        return None
+    full = os.path.abspath(os.path.join(base_dir, rel))
+    if not full.startswith(os.path.abspath(base_dir)):
+        return None
+    return full
+
+
+def _public_base_url(handler: BaseHTTPRequestHandler) -> str:
+    proto = (handler.headers.get("X-Forwarded-Proto") or "").strip() or "http"
+    host = (handler.headers.get("Host") or "").strip()
+    if not host:
+        host = f"{handler.server.server_address[0]}:{handler.server.server_address[1]}"
+    return f"{proto}://{host}"
+
+
 INDEX_HTML = """<!doctype html>
 <html>
 <head>
@@ -271,6 +296,7 @@ INDEX_HTML = """<!doctype html>
     <div>
       <div class="muted">分类管理</div>
       <div class="row">
+        <input id="catId" placeholder="ID(可选)" style="min-width:120px" />
         <input id="catName" placeholder="名称" style="min-width:160px" />
         <input id="catSort" placeholder="排序(0-99)" style="min-width:80px" />
         <label><input id="catVisible" type="checkbox" checked /> 显示</label>
@@ -284,7 +310,10 @@ INDEX_HTML = """<!doctype html>
     <div>
       <div class="muted">Banner 管理</div>
       <div class="row">
-        <input id="banImg" placeholder="图片URL" style="min-width:240px" />
+        <input id="banId" placeholder="ID(可选)" style="min-width:120px" />
+        <input id="banImg" placeholder="图片URL(或先上传)" style="min-width:240px" />
+        <input id="banFile" type="file" accept="image/*" style="min-width:260px" />
+        <button onclick="uploadBannerImage()">上传图片</button>
         <input id="banLink" placeholder="跳转URL" style="min-width:240px" />
         <input id="banSort" placeholder="排序" style="min-width:80px" />
         <label><input id="banActive" type="checkbox" checked /> 启用</label>
@@ -445,12 +474,14 @@ INDEX_HTML = """<!doctype html>
           <div class="muted">视频上传（创建上传任务，本地 userbot 拉取并上传到频道后回填链接）</div>
           <div class="row" style="margin-top:10px">
             <input id="vLocal" placeholder="本地文件名（local userbot 识别）" style="min-width:320px" />
-            <input id="vCategory" placeholder="分类ID" style="min-width:120px" />
+            <select id="vCategorySel" style="min-width:220px;padding:10px;border-radius:10px;border:1px solid #ccc"></select>
             <input id="vSort" placeholder="排序(越大越靠前)" style="min-width:160px" />
             <label class="muted"><input id="vPub" type="checkbox" checked /> 上架</label>
           </div>
           <div class="row" style="margin-top:10px">
             <input id="vCover" placeholder="展示图片URL(可选)" style="min-width:420px" />
+            <input id="vCoverFile" type="file" accept="image/*" style="min-width:260px" />
+            <button onclick="uploadCoverImage()">上传封面</button>
             <input id="vTags" placeholder="标签(逗号分隔,可选)" style="min-width:420px" />
           </div>
           <div class="row" style="margin-top:10px">
@@ -751,30 +782,139 @@ async function retryTxMatch(){
 
 async function loadCategories(){
   const data = await jget("/api/categories");
-  document.getElementById("categories").innerHTML = tableHtml(data.items||[]);
+  const items = data.items || [];
+  const rows = (items || []).map(x => {
+    const id = x.id ?? "";
+    const name = x.name ?? "";
+    const sort = x.sort_order ?? 0;
+    const vis = x.is_visible ? 1 : 0;
+    return `
+      <tr>
+        <td>${id}</td>
+        <td>${name}</td>
+        <td>${sort}</td>
+        <td>${vis}</td>
+        <td>
+          <button onclick="editCategory('${id}','${String(name).replace(/'/g,'&#39;')}','${sort}','${vis}')">编辑</button>
+          <button onclick="deleteCategory('${id}')">删除</button>
+        </td>
+      </tr>
+    `;
+  }).join("");
+  const html = `
+    <table>
+      <thead><tr><th>id</th><th>name</th><th>sort_order</th><th>is_visible</th><th>op</th></tr></thead>
+      <tbody>${rows || ""}</tbody>
+    </table>
+  `;
+  document.getElementById("categories").innerHTML = items.length ? html : "<div class='muted'>无数据</div>";
+
+  const sel = document.getElementById("vCategorySel");
+  if (sel) {
+    sel.innerHTML = `<option value="0">未分类(0)</option>` + items.map(x => `<option value="${x.id}">${x.id} - ${x.name}</option>`).join("");
+  }
 }
 async function upsertCategory(){
   const body = {
+    id: parseInt(document.getElementById("catId").value.trim()||"0",10),
     name: document.getElementById("catName").value.trim(),
     sort_order: parseInt(document.getElementById("catSort").value.trim()||"0",10),
     is_visible: document.getElementById("catVisible").checked
   };
   await jpost("/api/categories_upsert", body);
+  document.getElementById("catId").value = "";
+  document.getElementById("catName").value = "";
+  await loadCategories();
+}
+function editCategory(id, name, sort, vis){
+  document.getElementById("catId").value = id || "";
+  document.getElementById("catName").value = name || "";
+  document.getElementById("catSort").value = sort || "0";
+  document.getElementById("catVisible").checked = String(vis) === "1";
+}
+async function deleteCategory(id){
+  if(!id) return;
+  await jpost("/api/categories_delete", {id: parseInt(id,10)});
   await loadCategories();
 }
 async function loadBanners(){
   const data = await jget("/api/banners");
-  document.getElementById("banners").innerHTML = tableHtml(data.items||[]);
+  const items = data.items || [];
+  const rows = (items || []).map(x => {
+    const id = x.id ?? "";
+    const img = x.image_url ?? "";
+    const link = x.link_url ?? "";
+    const sort = x.sort_order ?? 0;
+    const act = x.is_active ? 1 : 0;
+    const thumb = img ? `<a href="${img}" target="_blank"><img src="${img}" style="width:84px;height:48px;object-fit:cover;border-radius:8px;border:1px solid #eee" /></a>` : "";
+    return `
+      <tr>
+        <td>${id}</td>
+        <td>${thumb}<div class="muted" style="max-width:420px;word-break:break-all">${img}</div></td>
+        <td style="max-width:320px;word-break:break-all">${link}</td>
+        <td>${sort}</td>
+        <td>${act}</td>
+        <td>
+          <button onclick="editBanner('${id}','${String(img).replace(/'/g,'&#39;')}','${String(link).replace(/'/g,'&#39;')}','${sort}','${act}')">编辑</button>
+          <button onclick="deleteBanner('${id}')">删除</button>
+        </td>
+      </tr>
+    `;
+  }).join("");
+  const html = `
+    <table>
+      <thead><tr><th>id</th><th>image</th><th>link</th><th>sort_order</th><th>is_active</th><th>op</th></tr></thead>
+      <tbody>${rows || ""}</tbody>
+    </table>
+  `;
+  document.getElementById("banners").innerHTML = items.length ? html : "<div class='muted'>无数据</div>";
 }
 async function upsertBanner(){
   const body = {
+    id: parseInt(document.getElementById("banId").value.trim()||"0",10),
     image_url: document.getElementById("banImg").value.trim(),
     link_url: document.getElementById("banLink").value.trim(),
     sort_order: parseInt(document.getElementById("banSort").value.trim()||"0",10),
     is_active: document.getElementById("banActive").checked
   };
   await jpost("/api/banners_upsert", body);
+  document.getElementById("banId").value = "";
   await loadBanners();
+}
+function editBanner(id, img, link, sort, act){
+  document.getElementById("banId").value = id || "";
+  document.getElementById("banImg").value = img || "";
+  document.getElementById("banLink").value = link || "";
+  document.getElementById("banSort").value = sort || "0";
+  document.getElementById("banActive").checked = String(act) === "1";
+}
+async function deleteBanner(id){
+  if(!id) return;
+  await jpost("/api/banners_delete", {id: parseInt(id,10)});
+  await loadBanners();
+}
+
+async function uploadImageFromInput(inputId, folder){
+  const el = document.getElementById(inputId);
+  const f = el && el.files && el.files[0] ? el.files[0] : null;
+  if(!f) throw new Error("no file");
+  const fd = new FormData();
+  fd.append("file", f);
+  fd.append("folder", folder||"misc");
+  const r = await fetch("/api/upload_image", {method:"POST", body: fd});
+  if(!r.ok){ throw new Error(await r.text()); }
+  return await r.json();
+}
+
+async function uploadBannerImage(){
+  const r = await uploadImageFromInput("banFile", "banners");
+  if(r && r.url) document.getElementById("banImg").value = r.url;
+  await loadBanners();
+}
+
+async function uploadCoverImage(){
+  const r = await uploadImageFromInput("vCoverFile", "covers");
+  if(r && r.url) document.getElementById("vCover").value = r.url;
 }
 
 async function loadVideosAdmin(){
@@ -788,7 +928,7 @@ async function loadVideosAdmin(){
 async function createVideoJob(){
   const body = {
     local_filename: document.getElementById("vLocal").value.trim(),
-    category_id: parseInt(document.getElementById("vCategory").value.trim()||"0",10),
+    category_id: parseInt((document.getElementById("vCategorySel").value||"0"),10),
     sort_order: parseInt(document.getElementById("vSort").value.trim()||"0",10),
     is_published: document.getElementById("vPub").checked,
     cover_url: document.getElementById("vCover").value.trim(),
@@ -900,6 +1040,21 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         path = u.path
 
+        if path.startswith("/uploads/"):
+            rel = path[len("/uploads/") :]
+            base = _uploads_dir()
+            full = _safe_join(base, rel)
+            if not full or not os.path.exists(full) or not os.path.isfile(full):
+                return self._send_headers_only(404, "text/plain", 0)
+            ctype, _ = mimetypes.guess_type(full)
+            if not ctype:
+                ctype = "application/octet-stream"
+            try:
+                size = int(os.path.getsize(full))
+            except Exception:
+                size = 0
+            return self._send_headers_only(200, ctype, size)
+
         if path.startswith("/webapp/"):
             return self._head_static_webapp(path)
 
@@ -977,6 +1132,22 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         path = u.path
+
+        if path.startswith("/uploads/"):
+            rel = path[len("/uploads/") :]
+            base = _uploads_dir()
+            full = _safe_join(base, rel)
+            if not full or not os.path.exists(full) or not os.path.isfile(full):
+                return self._send(404, b"Not Found", "text/plain; charset=utf-8")
+            ctype, _ = mimetypes.guess_type(full)
+            if not ctype:
+                ctype = "application/octet-stream"
+            try:
+                with open(full, "rb") as f:
+                    data = f.read()
+            except Exception:
+                return self._send(500, b"read failed", "text/plain; charset=utf-8")
+            return self._send(200, data, ctype)
 
         if path.startswith("/webapp/"):
             return self._serve_static_webapp(path)
@@ -1257,6 +1428,55 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, b"readonly", "text/plain; charset=utf-8")
         if not ADMIN_WEB_ACTIONS_ENABLE:
             return self._send(403, b"actions disabled", "text/plain; charset=utf-8")
+
+        if path == "/api/upload_image":
+            ct = (self.headers.get("Content-Type") or "").strip()
+            if "multipart/form-data" not in ct:
+                return self._send(400, b"bad content-type", "text/plain; charset=utf-8")
+            try:
+                form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": ct})
+            except Exception:
+                return self._send(400, b"bad multipart", "text/plain; charset=utf-8")
+            ff = form["file"] if "file" in form else None
+            if not ff or not getattr(ff, "file", None):
+                return self._send(400, b"missing file", "text/plain; charset=utf-8")
+            filename = (getattr(ff, "filename", "") or "").strip()
+            ctype = (getattr(ff, "type", "") or "").strip().lower()
+            folder = (form.getfirst("folder", "") or "").strip().lower()
+            if folder not in ("banners", "covers", "misc"):
+                folder = "misc"
+            ext = ""
+            fn_lower = filename.lower()
+            for e in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                if fn_lower.endswith(e):
+                    ext = e
+                    break
+            if not ext:
+                if ctype == "image/jpeg":
+                    ext = ".jpg"
+                elif ctype == "image/png":
+                    ext = ".png"
+                elif ctype == "image/webp":
+                    ext = ".webp"
+                elif ctype == "image/gif":
+                    ext = ".gif"
+            if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                return self._send(400, b"bad file type", "text/plain; charset=utf-8")
+            base = _uploads_dir()
+            rel = f"{folder}/{datetime.utcnow().strftime('%Y%m%d')}"
+            out_dir = _safe_join(base, rel)
+            if not out_dir:
+                return self._send(400, b"bad path", "text/plain; charset=utf-8")
+            os.makedirs(out_dir, exist_ok=True)
+            out_name = secrets.token_hex(16) + ext
+            out_full = os.path.join(out_dir, out_name)
+            try:
+                with open(out_full, "wb") as f:
+                    f.write(ff.file.read())
+            except Exception:
+                return self._send(500, b"write failed", "text/plain; charset=utf-8")
+            url = _public_base_url(self) + "/uploads/" + rel + "/" + out_name
+            return self._send(200, _json_bytes({"ok": True, "url": url}), "application/json; charset=utf-8")
 
         try:
             n = int(self.headers.get("Content-Length") or "0")
