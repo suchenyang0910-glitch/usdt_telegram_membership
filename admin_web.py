@@ -472,6 +472,7 @@ INDEX_HTML = """<!doctype html>
         <div style="height:12px"></div>
         <div class="panel">
           <div class="muted">视频上传（创建上传任务，本地 userbot 拉取并上传到频道后回填链接）</div>
+          <input id="vEditId" placeholder="video_id(编辑用)" style="min-width:220px;display:none" />
           <div class="row" style="margin-top:10px">
             <input id="vLocal" placeholder="本地文件名（local userbot 识别）" style="min-width:320px" />
             <input id="vVideoFile" type="file" accept="video/*" style="min-width:320px" onchange="useSelectedVideoName()" />
@@ -493,6 +494,7 @@ INDEX_HTML = """<!doctype html>
           </div>
           <div class="row" style="margin-top:10px">
             <button onclick="createVideoJob()">创建上传任务</button>
+            <button onclick="updateVideo()">保存修改</button>
           </div>
           <div class="muted" id="vResult" style="margin-top:8px"></div>
         </div>
@@ -553,6 +555,7 @@ function showPage(name){
   try{ history.replaceState(null,"","#"+name); }catch(e){}
   if(name === "videos"){
     try{ loadCategories(); }catch(e){}
+    try{ loadVideosAdmin(); }catch(e){}
   }
 }
 
@@ -936,7 +939,83 @@ async function loadVideosAdmin(){
   const status = document.getElementById("vStatus").value.trim();
   const url = "/api/videos_admin?q=" + encodeURIComponent(q) + "&status=" + encodeURIComponent(status) + "&limit=200";
   const data = await jget(url);
-  document.getElementById("videosAdmin").innerHTML = tableHtml(data.items||[]);
+  const items = data.items || [];
+  const rows = (items || []).map(v => {
+    const id = v.id ?? "";
+    const caption = v.caption ?? "";
+    const tags = v.tags ?? "";
+    const cover = v.cover_url ?? "";
+    const cat = v.category_id ?? 0;
+    const sort = v.sort_order ?? 0;
+    const pub = v.is_published ? 1 : 0;
+    const st = v.upload_status ?? "";
+    const paid = (v.channel_id && v.message_id) ? `https://t.me/c/${String(v.channel_id).replace('-100','')}/${v.message_id}` : "";
+    const free = (v.free_channel_id && v.free_message_id) ? `https://t.me/c/${String(v.free_channel_id).replace('-100','')}/${v.free_message_id}` : "";
+    const thumb = cover ? `<a href="${cover}" target="_blank"><img src="${cover}" style="width:84px;height:48px;object-fit:cover;border-radius:8px;border:1px solid #eee" /></a>` : "";
+    return `
+      <tr>
+        <td>${id}</td>
+        <td>${st}</td>
+        <td>${pub}</td>
+        <td>${sort}</td>
+        <td>${cat}</td>
+        <td style="max-width:360px;word-break:break-all">${thumb}<div>${caption}</div></td>
+        <td style="max-width:220px;word-break:break-all">${tags}</td>
+        <td style="max-width:220px;word-break:break-all">${paid ? `<a href="${paid}" target="_blank">paid</a>` : ""} ${free ? `<a href="${free}" target="_blank">free</a>` : ""}</td>
+        <td>
+          <button onclick="fillVideoForm('${id}', '${String(caption).replace(/'/g,'&#39;')}', '${String(tags).replace(/'/g,'&#39;')}', '${String(cover).replace(/'/g,'&#39;')}', '${cat}', '${sort}', '${pub}', '${String(v.local_filename||'').replace(/'/g,'&#39;')}')">编辑</button>
+          <button onclick="toggleVideoPublish('${id}', ${pub ? 0 : 1})">${pub ? "下架" : "上架"}</button>
+        </td>
+      </tr>
+    `;
+  }).join("");
+  const html = `
+    <table>
+      <thead>
+        <tr>
+          <th>id</th><th>status</th><th>pub</th><th>sort</th><th>cat</th><th>caption</th><th>tags</th><th>links</th><th>op</th>
+        </tr>
+      </thead>
+      <tbody>${rows || ""}</tbody>
+    </table>
+  `;
+  document.getElementById("videosAdmin").innerHTML = items.length ? html : "<div class='muted'>无数据</div>";
+}
+
+function fillVideoForm(id, caption, tags, cover, cat, sort, pub, local){
+  document.getElementById("vEditId").value = id || "";
+  document.getElementById("vLocal").value = local || "";
+  document.getElementById("vCaption").value = caption || "";
+  document.getElementById("vTags").value = tags || "";
+  document.getElementById("vCover").value = cover || "";
+  document.getElementById("vSort").value = sort || "0";
+  document.getElementById("vPub").checked = String(pub) === "1";
+  const sel = document.getElementById("vCategorySel");
+  if(sel) sel.value = String(cat || "0");
+  document.getElementById("vResult").innerText = "已载入 video_id=" + (id || "");
+}
+
+async function updateVideo(){
+  const id = document.getElementById("vEditId").value.trim();
+  if(!id) return;
+  const body = {
+    id: parseInt(id,10),
+    local_filename: document.getElementById("vLocal").value.trim(),
+    category_id: parseInt((document.getElementById("vCategorySel").value||"0"),10),
+    sort_order: parseInt(document.getElementById("vSort").value.trim()||"0",10),
+    is_published: document.getElementById("vPub").checked,
+    cover_url: document.getElementById("vCover").value.trim(),
+    tags: document.getElementById("vTags").value.trim(),
+    caption: document.getElementById("vCaption").value.trim()
+  };
+  await jpost("/api/video_update", body);
+  document.getElementById("vResult").innerText = "已更新 video_id=" + id;
+  await loadVideosAdmin();
+}
+
+async function toggleVideoPublish(id, pub){
+  await jpost("/api/video_publish", {id: parseInt(id,10), is_published: !!pub});
+  await loadVideosAdmin();
 }
 
 async function createVideoJob(){
@@ -951,6 +1030,7 @@ async function createVideoJob(){
   };
   const r = await jpost("/api/video_create", body);
   document.getElementById("vResult").innerText = "已创建任务 video_id=" + (r.id || "0");
+  document.getElementById("vEditId").value = String(r.id || "");
   await loadVideosAdmin();
 }
 
