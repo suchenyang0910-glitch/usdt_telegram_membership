@@ -474,7 +474,9 @@ INDEX_HTML = """<!doctype html>
           <div class="muted">视频上传（创建上传任务，本地 userbot 拉取并上传到频道后回填链接）</div>
           <div class="row" style="margin-top:10px">
             <input id="vLocal" placeholder="本地文件名（local userbot 识别）" style="min-width:320px" />
-            <select id="vCategorySel" style="min-width:220px;padding:10px;border-radius:10px;border:1px solid #ccc"></select>
+            <select id="vCategorySel" style="min-width:220px;padding:10px;border-radius:10px;border:1px solid #ccc">
+              <option value="0">请选择分类</option>
+            </select>
             <input id="vSort" placeholder="排序(越大越靠前)" style="min-width:160px" />
             <label class="muted"><input id="vPub" type="checkbox" checked /> 上架</label>
           </div>
@@ -547,6 +549,9 @@ function showPage(name){
     document.querySelectorAll(`.nav a[data-page='${p}']`).forEach(a=>a.classList.toggle("active", p===name));
   });
   try{ history.replaceState(null,"","#"+name); }catch(e){}
+  if(name === "videos"){
+    try{ loadCategories(); }catch(e){}
+  }
 }
 
 function initPage(){
