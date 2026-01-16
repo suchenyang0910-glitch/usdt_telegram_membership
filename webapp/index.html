@@ -21,13 +21,14 @@
         .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
         .skeleton { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; background-color: rgba(0,0,0,0.1); }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+        .app-pad-x { padding-left: 30px; padding-right: 30px; }
     </style>
 </head>
 <body class="pb-20">
     <div id="app" class="max-w-md mx-auto relative min-h-screen">
         
         <!-- Search Header -->
-        <div class="sticky top-0 z-20 bg-[var(--tg-theme-bg-color)] p-3 shadow-sm">
+        <div class="sticky top-0 z-20 bg-[var(--tg-theme-bg-color)] py-3 app-pad-x shadow-sm">
             <div class="relative">
                 <input type="text" id="searchInput" placeholder="Search videos..." 
                     class="w-full p-2 pl-9 rounded-lg border border-gray-200 dark:border-gray-700 bg-[var(--tg-theme-secondary-bg-color)] text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
@@ -36,14 +37,14 @@
         </div>
 
         <!-- Banners -->
-        <div id="bannerContainer" class="p-3 hidden">
+        <div id="bannerContainer" class="py-3 app-pad-x hidden">
             <div class="overflow-x-auto hide-scrollbar flex gap-3 snap-x snap-mandatory" id="bannerList">
                 <!-- Banners injected here -->
             </div>
         </div>
 
         <!-- Categories -->
-        <div class="px-3 mb-2 sticky top-[60px] z-10 bg-[var(--tg-theme-bg-color)] py-2">
+        <div class="app-pad-x mb-2 sticky top-[60px] z-10 bg-[var(--tg-theme-bg-color)] py-2">
             <div class="flex gap-2 overflow-x-auto hide-scrollbar" id="categoryList">
                 <button onclick="selectCategory(0)" class="cat-btn px-4 py-1.5 rounded-full text-xs font-medium whitespace-nowrap bg-blue-500 text-white" data-id="0">
                     All
@@ -53,13 +54,13 @@
         </div>
 
         <!-- Sort Tabs -->
-        <div class="px-3 mb-3 flex gap-4 text-sm text-gray-500 border-b border-gray-100 dark:border-gray-800">
+        <div class="app-pad-x mb-3 flex gap-4 text-sm text-gray-500 border-b border-gray-100 dark:border-gray-800">
             <button onclick="setSort('latest')" id="sort-latest" class="pb-2 font-medium text-blue-500 border-b-2 border-blue-500">Latest</button>
             <button onclick="setSort('hot')" id="sort-hot" class="pb-2 font-medium">Hot</button>
         </div>
 
         <!-- Video List -->
-        <div id="videoList" class="px-3 grid grid-cols-1 gap-4">
+        <div id="videoList" class="app-pad-x grid grid-cols-1 gap-4">
             <!-- Videos injected here -->
         </div>
 
@@ -68,7 +69,7 @@
         <div id="noMore" class="py-6 text-center text-gray-400 text-xs hidden">No more videos</div>
 
         <!-- Bottom Bar (User Info) -->
-        <div class="fixed bottom-0 left-0 right-0 bg-[var(--tg-theme-secondary-bg-color)] border-t border-gray-200 dark:border-gray-800 p-3 flex justify-between items-center z-30 max-w-md mx-auto">
+        <div class="fixed bottom-0 left-0 right-0 bg-[var(--tg-theme-secondary-bg-color)] border-t border-gray-200 dark:border-gray-800 py-3 app-pad-x flex justify-between items-center z-30 max-w-md mx-auto">
             <div class="flex items-center gap-2">
                 <div class="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center text-xs font-bold" id="userAvatar">U</div>
                 <div class="flex flex-col">
