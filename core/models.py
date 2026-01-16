@@ -293,6 +293,27 @@ def init_tables():
         """
     )
 
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS video_download_jobs (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            source_url VARCHAR(1024) NULL,
+            caption TEXT NULL,
+            filename VARCHAR(256) NULL,
+            file_size BIGINT DEFAULT 0,
+            progress INT DEFAULT 0,
+            status VARCHAR(16) DEFAULT 'pending',
+            started_at DATETIME NULL,
+            finished_at DATETIME NULL,
+            error_message VARCHAR(256) NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+    )
+    _ensure_index(cur, "video_download_jobs", "idx_vdj_status_created", "status, created_at")
+    _ensure_index(cur, "video_download_jobs", "idx_vdj_updated", "updated_at")
+
     cur.close()
     try:
         conn.close()
@@ -1366,5 +1387,102 @@ def local_uploader_update(video_id: int, upload_status: str, channel_id: int | N
         params.append((error or "")[:256] or None)
     params.append(int(video_id))
     cur.execute(f"UPDATE videos SET {', '.join(sets)} WHERE id=%s", tuple(params))
+    cur.close()
+    conn.close()
+
+
+def admin_create_download_job(source_url: str, caption: str, filename: str) -> int:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO video_download_jobs (source_url, caption, filename, file_size, progress, status)
+        VALUES (%s,%s,%s,0,0,'pending')
+        """,
+        ((source_url or "").strip()[:1024] or None, (caption or "").strip() or None, (filename or "").strip()[:256] or None),
+    )
+    rid = int(cur.lastrowid or 0)
+    cur.close()
+    conn.close()
+    return rid
+
+
+def list_download_jobs(limit: int = 200, status: str | None = None) -> list[dict]:
+    limit = max(1, min(int(limit or 200), 2000))
+    st = (status or "").strip().lower()
+    where = ["1=1"]
+    params: list = []
+    if st in ("pending", "downloading", "done", "failed"):
+        where.append("status=%s")
+        params.append(st)
+    sql = f"""
+        SELECT id, status, progress, caption, filename, file_size, started_at, finished_at, created_at, updated_at, error_message, source_url
+        FROM video_download_jobs
+        WHERE {' AND '.join(where)}
+        ORDER BY id DESC
+        LIMIT %s
+    """
+    params.append(limit)
+    conn = get_conn()
+    cur = conn.cursor(dictionary=True)
+    cur.execute(sql, tuple(params))
+    rows = cur.fetchall() or []
+    cur.close()
+    conn.close()
+    return rows
+
+
+def local_downloader_claim_next() -> dict | None:
+    conn = get_conn()
+    cur = conn.cursor(dictionary=True)
+    cur.execute("SELECT * FROM video_download_jobs WHERE status='pending' ORDER BY id ASC LIMIT 1")
+    row = cur.fetchone()
+    if not row:
+        cur.close()
+        conn.close()
+        return None
+    jid = int(row.get("id") or 0)
+    cur2 = conn.cursor()
+    cur2.execute(
+        "UPDATE video_download_jobs SET status='downloading', started_at=IFNULL(started_at, UTC_TIMESTAMP()), updated_at=UTC_TIMESTAMP() WHERE id=%s AND status='pending'",
+        (jid,),
+    )
+    ok = cur2.rowcount == 1
+    cur2.close()
+    cur.close()
+    conn.close()
+    return row if ok else None
+
+
+def local_downloader_update(job_id: int, status: str, progress: int | None, file_size: int | None, filename: str | None, started_at: datetime | None, finished_at: datetime | None, error: str | None):
+    st = (status or "").strip().lower()
+    if st not in ("pending", "downloading", "done", "failed"):
+        st = "failed"
+    sets = ["status=%s", "updated_at=UTC_TIMESTAMP()"]
+    params: list = [st]
+    if progress is not None:
+        sets.append("progress=%s")
+        params.append(max(0, min(int(progress), 100)))
+    if file_size is not None:
+        sets.append("file_size=%s")
+        params.append(max(0, int(file_size)))
+    if filename is not None:
+        sets.append("filename=%s")
+        params.append((filename or "").strip()[:256] or None)
+    if started_at is not None:
+        sets.append("started_at=%s")
+        params.append(started_at)
+    if finished_at is not None:
+        sets.append("finished_at=%s")
+        params.append(finished_at)
+    if st in ("done", "failed"):
+        sets.append("finished_at=IFNULL(finished_at, UTC_TIMESTAMP())")
+    if error is not None:
+        sets.append("error_message=%s")
+        params.append((error or "")[:256] or None)
+    params.append(int(job_id))
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(f"UPDATE video_download_jobs SET {', '.join(sets)} WHERE id=%s", tuple(params))
     cur.close()
     conn.close()

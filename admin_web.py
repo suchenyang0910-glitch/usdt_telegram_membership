@@ -47,6 +47,7 @@ from config import (
 )
 from core.db import get_conn
 from core.models import (
+    admin_create_download_job,
     admin_create_video_job,
     admin_set_video_publish,
     admin_set_video_sort,
@@ -55,7 +56,10 @@ from core.models import (
     init_tables,
     list_banners,
     list_categories,
+    list_download_jobs,
     list_videos_admin,
+    local_downloader_claim_next,
+    local_downloader_update,
     local_uploader_claim_next,
     local_uploader_update,
     mark_order_success,
@@ -462,6 +466,26 @@ INDEX_HTML = """<!doctype html>
       <div class="page" id="page-videos">
         <h3>视频管理</h3>
         <div class="panel">
+          <div class="muted">视频下载任务（本地 downloader 拉取任务并回传进度）</div>
+          <div class="row" style="margin-top:10px">
+            <input id="dStatus" placeholder="status(pending/downloading/done/failed)" style="min-width:320px" />
+            <button onclick="loadDownloadJobs()">刷新列表</button>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <input id="dUrl" placeholder="下载地址(可选)" style="min-width:520px" />
+            <input id="dFilename" placeholder="文件名(建议填写)" style="min-width:320px" />
+          </div>
+          <div class="row" style="margin-top:10px">
+            <textarea id="dCaption" placeholder="视频文案(可选)"></textarea>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <button onclick="createDownloadJob()">创建下载任务</button>
+            <span class="muted" id="dResult"></span>
+          </div>
+          <div id="downloadJobs"></div>
+        </div>
+        <div style="height:12px"></div>
+        <div class="panel">
           <div class="row">
             <input id="vQ" placeholder="搜索标题/文案" style="min-width:260px" />
             <input id="vStatus" placeholder="status(pending/uploading/done/failed)" style="min-width:260px" />
@@ -556,6 +580,7 @@ function showPage(name){
   if(name === "videos"){
     try{ loadCategories(); }catch(e){}
     try{ loadVideosAdmin(); }catch(e){}
+    try{ loadDownloadJobs(); }catch(e){}
   }
 }
 
@@ -982,6 +1007,61 @@ async function loadVideosAdmin(){
   document.getElementById("videosAdmin").innerHTML = items.length ? html : "<div class='muted'>无数据</div>";
 }
 
+async function loadDownloadJobs(){
+  const status = document.getElementById("dStatus").value.trim();
+  const url = "/api/download_jobs?status=" + encodeURIComponent(status) + "&limit=200";
+  const data = await jget(url);
+  const items = data.items || [];
+  const rows = (items || []).map(x => {
+    const id = x.id ?? "";
+    const st = x.status ?? "";
+    const p = x.progress ?? 0;
+    const cap = x.caption ?? "";
+    const fn = x.filename ?? "";
+    const sz = x.file_size ?? 0;
+    const sAt = x.started_at ?? "";
+    const fAt = x.finished_at ?? "";
+    const cAt = x.created_at ?? "";
+    const err = x.error_message ?? "";
+    return `
+      <tr>
+        <td>${id}</td>
+        <td>${st}</td>
+        <td>${p}%</td>
+        <td>${sz}</td>
+        <td style="max-width:260px;word-break:break-all">${fn}</td>
+        <td style="max-width:420px;word-break:break-all">${cap}</td>
+        <td>${sAt}</td>
+        <td>${fAt}</td>
+        <td>${cAt}</td>
+        <td style="max-width:260px;word-break:break-all">${err}</td>
+      </tr>
+    `;
+  }).join("");
+  const html = `
+    <table>
+      <thead>
+        <tr>
+          <th>id</th><th>status</th><th>progress</th><th>size</th><th>filename</th><th>caption</th><th>started_at</th><th>finished_at</th><th>created_at</th><th>error</th>
+        </tr>
+      </thead>
+      <tbody>${rows || ""}</tbody>
+    </table>
+  `;
+  document.getElementById("downloadJobs").innerHTML = items.length ? html : "<div class='muted'>无数据</div>";
+}
+
+async function createDownloadJob(){
+  const body = {
+    source_url: document.getElementById("dUrl").value.trim(),
+    filename: document.getElementById("dFilename").value.trim(),
+    caption: document.getElementById("dCaption").value.trim()
+  };
+  const r = await jpost("/api/download_job_create", body);
+  document.getElementById("dResult").innerText = "已创建 job_id=" + (r.id || "0");
+  await loadDownloadJobs();
+}
+
 function fillVideoForm(id, caption, tags, cover, cat, sort, pub, local){
   document.getElementById("vEditId").value = id || "";
   document.getElementById("vLocal").value = local || "";
@@ -1321,6 +1401,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/local_uploader/claim":
                 job = local_uploader_claim_next()
                 return self._send(200, _json_bytes({"job": job}), "application/json; charset=utf-8")
+            if path == "/api/local_uploader/download_claim":
+                job = local_downloader_claim_next()
+                return self._send(200, _json_bytes({"job": job}), "application/json; charset=utf-8")
             return self._send(404, b"Not Found", "text/plain")
 
         if path == "/health":
@@ -1346,6 +1429,13 @@ class Handler(BaseHTTPRequestHandler):
             status = (qs.get("status", [""])[0] or "").strip() or None
             limit = int((qs.get("limit", ["200"])[0] or "200"))
             body = _json_bytes({"items": list_videos_admin(q=q, limit=limit, status=status)})
+            return self._send(200, body, "application/json; charset=utf-8")
+
+        if path == "/api/download_jobs":
+            qs = parse_qs(u.query)
+            status = (qs.get("status", [""])[0] or "").strip() or None
+            limit = int((qs.get("limit", ["200"])[0] or "200"))
+            body = _json_bytes({"items": list_download_jobs(limit=limit, status=status)})
             return self._send(200, body, "application/json; charset=utf-8")
 
         if path == "/api/users":
@@ -1514,6 +1604,18 @@ class Handler(BaseHTTPRequestHandler):
                     error=data.get("error"),
                 )
                 return self._send(200, _json_bytes({"ok": True}), "application/json; charset=utf-8")
+            if path == "/api/local_uploader/download_update":
+                local_downloader_update(
+                    job_id=int(data.get("job_id") or 0),
+                    status=(data.get("status") or "").strip(),
+                    progress=data.get("progress"),
+                    file_size=data.get("file_size"),
+                    filename=data.get("filename"),
+                    started_at=None,
+                    finished_at=None,
+                    error=data.get("error"),
+                )
+                return self._send(200, _json_bytes({"ok": True}), "application/json; charset=utf-8")
             return self._send(404, b"Not Found", "text/plain")
 
         if not self._require_auth():
@@ -1609,6 +1711,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/banners_delete":
             delete_banner(int(data.get("id") or 0))
             return self._send(200, _json_bytes({"ok": True}), "application/json; charset=utf-8")
+
+        if path == "/api/download_job_create":
+            jid = admin_create_download_job(
+                source_url=(data.get("source_url") or "").strip(),
+                caption=(data.get("caption") or "").strip(),
+                filename=(data.get("filename") or "").strip(),
+            )
+            return self._send(200, _json_bytes({"ok": True, "id": jid}), "application/json; charset=utf-8")
 
         if path == "/api/video_create":
             sdt = (data.get("published_at") or "").strip()
