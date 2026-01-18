@@ -4,7 +4,7 @@ import os
 import random
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
@@ -119,7 +119,7 @@ def _write_heartbeat():
         os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
         tmp = p + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"ok": True, "ts": datetime.utcnow().isoformat()}, f, ensure_ascii=False)
+            json.dump({"ok": True, "ts": datetime.now(timezone.utc).isoformat()}, f, ensure_ascii=False)
         os.replace(tmp, p)
     except Exception:
         return
