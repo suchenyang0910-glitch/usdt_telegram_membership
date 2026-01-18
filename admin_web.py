@@ -966,26 +966,42 @@ async function uploadVideoToServer(){
   const el = document.getElementById("vVideoFile");
   const f = el && el.files && el.files[0] ? el.files[0] : null;
   if(!f){ throw new Error("no file"); }
-  document.getElementById("vUploadHint").innerText = "上传中...";
+  document.getElementById("vUploadHint").innerText = "上传中... 0%";
   const fd = new FormData();
   fd.append("file", f);
-  const r = await fetch("/api/upload_video_file", {method:"POST", body: fd});
-  if(!r.ok){
-    const t = await r.text();
-    document.getElementById("vUploadHint").innerText = "上传失败：" + t;
-    throw new Error(t);
-  }
-  const data = await r.json();
+  const data = await new Promise((resolve, reject)=>{
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/upload_video_file", true);
+    xhr.timeout = 2 * 60 * 60 * 1000;
+    xhr.upload.onprogress = (e)=>{
+      if(!e || !e.lengthComputable){ return; }
+      const pct = Math.floor((e.loaded * 100) / Math.max(1, e.total));
+      document.getElementById("vUploadHint").innerText = "上传中... " + pct + "% (" + e.loaded + "/" + e.total + ")";
+    };
+    xhr.onerror = ()=>reject(new Error("network error"));
+    xhr.ontimeout = ()=>reject(new Error("timeout"));
+    xhr.onload = ()=>{
+      if(xhr.status < 200 || xhr.status >= 300){
+        reject(new Error(xhr.responseText || ("http " + xhr.status)));
+        return;
+      }
+      try{
+        resolve(JSON.parse(xhr.responseText || "{}"));
+      }catch(e){
+        reject(new Error("bad response"));
+      }
+    };
+    xhr.send(fd);
+  });
   if(data && data.server_path){
     document.getElementById("vServerPath").value = data.server_path;
     document.getElementById("vServerSize").value = String(data.file_size || 0);
     if(data.original_filename) document.getElementById("vLocal").value = data.original_filename;
     document.getElementById("vUploadHint").innerText = "已上传到服务器：" + data.server_path + " (" + (data.file_size || 0) + " bytes)";
     return data;
-  } else {
-    document.getElementById("vUploadHint").innerText = "上传失败：bad response";
-    throw new Error("bad response");
   }
+  document.getElementById("vUploadHint").innerText = "上传失败：bad response";
+  throw new Error("bad response");
 }
 
 async function loadVideosAdmin(){
@@ -1142,7 +1158,7 @@ async function createVideoJob(){
       await uploadVideoToServer();
       server_path = document.getElementById("vServerPath").value.trim();
     }catch(e){
-      document.getElementById("vResult").innerText = "上传视频失败";
+      document.getElementById("vResult").innerText = "上传视频失败：" + (e && e.message ? e.message : "");
       return;
     }
   }
