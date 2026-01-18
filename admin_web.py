@@ -501,7 +501,6 @@ INDEX_HTML = """<!doctype html>
           <div class="row" style="margin-top:10px">
             <input id="vLocal" placeholder="文件名" style="min-width:320px" />
             <input id="vVideoFile" type="file" accept="video/*" style="min-width:320px" />
-            <button onclick="uploadVideoToServer()">上传视频到服务器</button>
             <select id="vCategorySel" style="min-width:220px;padding:10px;border-radius:10px;border:1px solid #ccc">
               <option value="0">请选择分类</option>
             </select>
@@ -510,11 +509,10 @@ INDEX_HTML = """<!doctype html>
           </div>
           <input id="vServerPath" style="display:none" />
           <input id="vServerSize" style="display:none" />
-          <div class="muted" style="margin-top:6px" id="vUploadHint">请先选择视频文件并上传到服务器</div>
+          <div class="muted" style="margin-top:6px" id="vUploadHint">选择视频文件后，点击“创建上传任务”会自动上传到服务器</div>
           <div class="row" style="margin-top:10px">
             <input id="vCover" placeholder="展示图片URL(可选)" style="min-width:420px" />
             <input id="vCoverFile" type="file" accept="image/*" style="min-width:260px" />
-            <button onclick="uploadCoverImage()">上传封面</button>
             <input id="vTags" placeholder="标签(逗号分隔,可选)" style="min-width:420px" />
           </div>
           <div class="row" style="margin-top:10px">
@@ -954,6 +952,7 @@ async function uploadBannerImage(){
 async function uploadCoverImage(){
   const r = await uploadImageFromInput("vCoverFile", "covers");
   if(r && r.url) document.getElementById("vCover").value = r.url;
+  return r;
 }
 
 function useSelectedVideoName(){
@@ -966,14 +965,15 @@ function useSelectedVideoName(){
 async function uploadVideoToServer(){
   const el = document.getElementById("vVideoFile");
   const f = el && el.files && el.files[0] ? el.files[0] : null;
-  if(!f){ return; }
+  if(!f){ throw new Error("no file"); }
   document.getElementById("vUploadHint").innerText = "上传中...";
   const fd = new FormData();
   fd.append("file", f);
   const r = await fetch("/api/upload_video_file", {method:"POST", body: fd});
   if(!r.ok){
-    document.getElementById("vUploadHint").innerText = "上传失败：" + (await r.text());
-    return;
+    const t = await r.text();
+    document.getElementById("vUploadHint").innerText = "上传失败：" + t;
+    throw new Error(t);
   }
   const data = await r.json();
   if(data && data.server_path){
@@ -981,8 +981,10 @@ async function uploadVideoToServer(){
     document.getElementById("vServerSize").value = String(data.file_size || 0);
     if(data.original_filename) document.getElementById("vLocal").value = data.original_filename;
     document.getElementById("vUploadHint").innerText = "已上传到服务器：" + data.server_path + " (" + (data.file_size || 0) + " bytes)";
+    return data;
   } else {
     document.getElementById("vUploadHint").innerText = "上传失败：bad response";
+    throw new Error("bad response");
   }
 }
 
@@ -1126,10 +1128,23 @@ async function toggleVideoPublish(id, pub){
 }
 
 async function createVideoJob(){
-  const server_path = document.getElementById("vServerPath").value.trim();
+  document.getElementById("vResult").innerText = "处理中...";
+  if(!document.getElementById("vCover").value.trim()){
+    const el = document.getElementById("vCoverFile");
+    const f = el && el.files && el.files[0] ? el.files[0] : null;
+    if(f){
+      try{ await uploadCoverImage(); }catch(e){}
+    }
+  }
+  let server_path = document.getElementById("vServerPath").value.trim();
   if(!server_path){
-    document.getElementById("vResult").innerText = "请先上传视频到服务器";
-    return;
+    try{
+      await uploadVideoToServer();
+      server_path = document.getElementById("vServerPath").value.trim();
+    }catch(e){
+      document.getElementById("vResult").innerText = "上传视频失败";
+      return;
+    }
   }
   const body = {
     local_filename: document.getElementById("vLocal").value.trim(),

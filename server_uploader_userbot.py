@@ -14,6 +14,7 @@ from config import (
     FREE_CHANNEL_IDS,
     HIGHLIGHT_CHANNEL_ID,
     PAID_CHANNEL_ID,
+    HEARTBEAT_USERBOT_FILE,
     USERBOT_API_HASH,
     USERBOT_API_ID,
     USERBOT_CLIP_RANDOM,
@@ -22,7 +23,7 @@ from config import (
     USERBOT_STRING_SESSION,
 )
 from core.db import get_conn
-from core.models import local_uploader_update
+from core.models import init_tables, local_uploader_update
 
 
 def _work_root() -> str:
@@ -110,6 +111,20 @@ def _claim_next() -> dict | None:
     return row if ok else None
 
 
+def _write_heartbeat():
+    p = (HEARTBEAT_USERBOT_FILE or "").strip()
+    if not p:
+        return
+    try:
+        os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"ok": True, "ts": datetime.utcnow().isoformat()}, f, ensure_ascii=False)
+        os.replace(tmp, p)
+    except Exception:
+        return
+
+
 async def _process_job(client: TelegramClient, job: dict):
     video_id = int(job.get("id") or 0)
     server_file_path = (job.get("server_file_path") or "").strip()
@@ -172,11 +187,18 @@ async def main():
     if not PAID_CHANNEL_ID:
         raise SystemExit("PAID_CHANNEL_ID missing")
 
+    init_tables()
+
     name = USERBOT_SESSION_NAME or "tmp/userbot/telethon"
     sess = StringSession(USERBOT_STRING_SESSION)
     async with TelegramClient(sess or name, USERBOT_API_ID, USERBOT_API_HASH) as client:
         print(f"[server_uploader] start work_root={_work_root()} paid_channel_id={PAID_CHANNEL_ID}")
+        last_hb = 0.0
         while True:
+            now = time.time()
+            if now - last_hb >= 60:
+                _write_heartbeat()
+                last_hb = now
             job = _claim_next()
             if not job:
                 await asyncio.sleep(5)
