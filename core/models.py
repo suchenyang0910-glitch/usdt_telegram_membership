@@ -249,6 +249,8 @@ def init_tables():
     _ensure_column(cur, "videos", "upload_status", "upload_status VARCHAR(16) DEFAULT 'done'")
     _ensure_column(cur, "videos", "local_filename", "local_filename VARCHAR(256) NULL")
     _ensure_column(cur, "videos", "error_message", "error_message VARCHAR(256) NULL")
+    _ensure_column(cur, "videos", "server_file_path", "server_file_path VARCHAR(512) NULL")
+    _ensure_column(cur, "videos", "server_file_size", "server_file_size BIGINT DEFAULT 0")
     _ensure_index(cur, "videos", "idx_videos_channel_msg", "channel_id, message_id")
     _ensure_index(cur, "videos", "idx_videos_created", "created_at")
     _ensure_index(cur, "videos", "idx_videos_view_count", "view_count")
@@ -1242,13 +1244,13 @@ def user_viewed_tags(telegram_id: int, limit: int = 200) -> list[dict]:
     return out[:50]
 
 
-def admin_create_video_job(local_filename: str, caption: str, cover_url: str, tags: str, category_id: int, sort_order: int, is_published: bool, published_at: datetime | None) -> int:
+def admin_create_video_job(local_filename: str, caption: str, cover_url: str, tags: str, category_id: int, sort_order: int, is_published: bool, published_at: datetime | None, server_file_path: str | None = None, server_file_size: int | None = None) -> int:
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
         """
-        INSERT INTO videos (channel_id, message_id, file_id, caption, view_count, category_id, cover_url, tags, is_published, sort_order, published_at, upload_status, local_filename)
-        VALUES (NULL, NULL, NULL, %s, 0, %s, %s, %s, %s, %s, %s, 'pending', %s)
+        INSERT INTO videos (channel_id, message_id, file_id, caption, view_count, category_id, cover_url, tags, is_published, sort_order, published_at, upload_status, local_filename, server_file_path, server_file_size)
+        VALUES (NULL, NULL, NULL, %s, 0, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s)
         """,
         (
             caption or "",
@@ -1259,6 +1261,8 @@ def admin_create_video_job(local_filename: str, caption: str, cover_url: str, ta
             int(sort_order or 0),
             published_at,
             (local_filename or "").strip()[:256] or None,
+            (server_file_path or "").strip()[:512] or None,
+            int(server_file_size or 0),
         ),
     )
     vid = int(cur.lastrowid or 0)
@@ -1322,6 +1326,7 @@ def list_videos_admin(q: str, limit: int = 200, status: str | None = None) -> li
         params.append(st)
     sql = f"""
         SELECT id, caption, cover_url, tags, category_id, sort_order, is_published, published_at, upload_status, local_filename,
+               server_file_path, server_file_size,
                channel_id, message_id, free_channel_id, free_message_id, view_count, created_at
         FROM videos
         WHERE {' AND '.join(where)}
@@ -1341,7 +1346,9 @@ def list_videos_admin(q: str, limit: int = 200, status: str | None = None) -> li
 def local_uploader_claim_next() -> dict | None:
     conn = get_conn()
     cur = conn.cursor(dictionary=True)
-    cur.execute("SELECT * FROM videos WHERE upload_status='pending' ORDER BY created_at ASC LIMIT 1")
+    cur.execute(
+        "SELECT * FROM videos WHERE upload_status='pending' AND (server_file_path IS NULL OR server_file_path='') ORDER BY created_at ASC LIMIT 1"
+    )
     row = cur.fetchone()
     if not row:
         cur.close()

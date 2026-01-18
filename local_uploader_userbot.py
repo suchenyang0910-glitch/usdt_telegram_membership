@@ -14,23 +14,78 @@ from bot.captions import compose_free_caption
 from config import (
     FREE_CHANNEL_IDS,
     HIGHLIGHT_CHANNEL_ID,
-    LOCAL_UPLOADER_TOKEN,
     PAID_CHANNEL_ID,
-    USERBOT_API_HASH,
-    USERBOT_API_ID,
     USERBOT_CLIP_RANDOM,
     USERBOT_CLIP_SECONDS,
-    USERBOT_SESSION_NAME,
-    USERBOT_STRING_SESSION,
 )
 
 
+_LOCAL_ENV_LOADED = False
+
+
+def _maybe_load_local_env():
+    global _LOCAL_ENV_LOADED
+    if _LOCAL_ENV_LOADED:
+        return
+    base = os.path.dirname(os.path.abspath(__file__))
+    env_path = os.path.join(base, "local_userbot.env")
+    if not os.path.exists(env_path):
+        _LOCAL_ENV_LOADED = True
+        return
+    try:
+        with open(env_path, "r", encoding="utf-8-sig") as f:
+            for line in f:
+                s = (line or "").strip()
+                if not s or s.startswith("#"):
+                    continue
+                if "=" not in s:
+                    continue
+                k, v = s.split("=", 1)
+                k = (k or "").strip().lstrip("\ufeff")
+                if not k:
+                    continue
+                if os.getenv(k, "").strip():
+                    continue
+                os.environ[k] = (v or "").strip()
+    except Exception:
+        _LOCAL_ENV_LOADED = True
+        return
+    _LOCAL_ENV_LOADED = True
+
+
+_maybe_load_local_env()
+
+
 def _base_url() -> str:
-    return (os.getenv("LOCAL_UPLOADER_BASE_URL", "") or "").strip().rstrip("/")
+    return (os.getenv("LOCAL_UPLOADER_BASE_URL", "") or os.getenv("LOCAL_USERBOT_BASE_URL", "") or "").strip().rstrip("/")
 
 
 def _work_dir() -> str:
-    return (os.getenv("LOCAL_UPLOADER_DIR", "") or "").strip() or "."
+    return (os.getenv("LOCAL_UPLOADER_DIR", "") or os.getenv("LOCAL_USERBOT_UPLOAD_DIR", "") or "").strip() or "."
+
+
+def _api_id() -> int:
+    v = (os.getenv("LOCAL_USERBOT_API_ID", "") or "").strip()
+    return int(v) if v else 0
+
+
+def _api_hash() -> str:
+    return (os.getenv("LOCAL_USERBOT_API_HASH", "") or "").strip()
+
+
+def _string_session() -> str:
+    return (os.getenv("LOCAL_USERBOT_STRING_SESSION", "") or "").strip()
+
+
+def _token() -> str:
+    return (os.getenv("LOCAL_UPLOADER_TOKEN", "") or "").strip()
+
+
+def _paid_channel_id() -> int:
+    if PAID_CHANNEL_ID:
+        return int(PAID_CHANNEL_ID)
+    v = (os.getenv("LOCAL_USERBOT_UPLOAD_CHANNEL_ID", "") or os.getenv("LOCAL_USERBOT_CHANNEL_ID", "") or "").strip()
+    return int(v) if v else 0
 
 
 def _http_json(method: str, url: str, headers: dict[str, str], body: dict | None = None) -> dict:
@@ -96,7 +151,20 @@ def _clip_video(src: str, dst: str, start: int, length: int) -> bool:
 
 def _clip_targets() -> list[int]:
     targets = []
-    for ch in ([HIGHLIGHT_CHANNEL_ID] + list(FREE_CHANNEL_IDS)):
+    base = []
+    if HIGHLIGHT_CHANNEL_ID:
+        base.append(int(HIGHLIGHT_CHANNEL_ID))
+    for ch in list(FREE_CHANNEL_IDS or []):
+        if ch:
+            base.append(int(ch))
+    if not base:
+        fallback = (os.getenv("LOCAL_USERBOT_DOWNLOAD_CHANNEL_ID", "") or os.getenv("LOCAL_USERBOT_CHANNEL_ID", "") or "").strip()
+        if fallback:
+            try:
+                base.append(int(fallback))
+            except Exception:
+                pass
+    for ch in base:
         if ch and ch not in targets:
             targets.append(int(ch))
     return targets
@@ -121,13 +189,13 @@ async def _process_job(client: TelegramClient, base_url: str, job: dict):
         _http_json(
             "POST",
             base_url + "/api/local_uploader/update",
-            {"X-Local-Uploader-Token": LOCAL_UPLOADER_TOKEN},
+            {"X-Local-Uploader-Token": _token()},
             {"video_id": video_id, "upload_status": "failed", "error": f"file not found: {src_path}"},
         )
         return
 
     try:
-        sent = await client.send_file(PAID_CHANNEL_ID, src_path, caption=caption, supports_streaming=True)
+        sent = await client.send_file(_paid_channel_id(), src_path, caption=caption, supports_streaming=True)
         paid_msg_id = int(getattr(sent, "id", 0) or 0)
         file_id = None
         try:
@@ -155,11 +223,11 @@ async def _process_job(client: TelegramClient, base_url: str, job: dict):
         _http_json(
             "POST",
             base_url + "/api/local_uploader/update",
-            {"X-Local-Uploader-Token": LOCAL_UPLOADER_TOKEN},
+            {"X-Local-Uploader-Token": _token()},
             {
                 "video_id": video_id,
                 "upload_status": "done",
-                "channel_id": int(PAID_CHANNEL_ID),
+                "channel_id": int(_paid_channel_id()),
                 "message_id": paid_msg_id,
                 "free_channel_id": int(free_ch) if free_ch is not None else None,
                 "free_message_id": int(free_msg_id) if free_msg_id is not None else None,
@@ -170,7 +238,7 @@ async def _process_job(client: TelegramClient, base_url: str, job: dict):
         _http_json(
             "POST",
             base_url + "/api/local_uploader/update",
-            {"X-Local-Uploader-Token": LOCAL_UPLOADER_TOKEN},
+            {"X-Local-Uploader-Token": _token()},
             {"video_id": video_id, "upload_status": "failed", "error": f"{type(e).__name__}: {e}"},
         )
 
@@ -179,31 +247,44 @@ async def main():
     base_url = _base_url()
     if not base_url:
         raise SystemExit("LOCAL_UPLOADER_BASE_URL missing")
-    if not LOCAL_UPLOADER_TOKEN:
+    if not _token():
         raise SystemExit("LOCAL_UPLOADER_TOKEN missing")
-    if not USERBOT_API_ID or not USERBOT_API_HASH:
-        raise SystemExit("USERBOT_API_ID/USERBOT_API_HASH missing")
+    if not _api_id() or not _api_hash():
+        raise SystemExit("LOCAL_USERBOT_API_ID/LOCAL_USERBOT_API_HASH missing")
+    if not _paid_channel_id():
+        raise SystemExit("PAID_CHANNEL_ID missing (or LOCAL_USERBOT_UPLOAD_CHANNEL_ID)")
 
     sess = None
-    if USERBOT_STRING_SESSION:
-        sess = StringSession(USERBOT_STRING_SESSION)
-    name = USERBOT_SESSION_NAME or "pv_userbot"
+    ss = _string_session()
+    if ss:
+        sess = StringSession(ss)
+    name = "pv_local_uploader"
 
-    async with TelegramClient(sess or name, USERBOT_API_ID, USERBOT_API_HASH) as client:
+    async with TelegramClient(sess or name, _api_id(), _api_hash()) as client:
+        print(f"[local_uploader] start base_url={base_url} work_dir={_work_dir()} paid_channel_id={_paid_channel_id()}")
+        last_idle = 0.0
         while True:
             try:
                 data = _http_json(
                     "GET",
                     base_url + "/api/local_uploader/claim",
-                    {"X-Local-Uploader-Token": LOCAL_UPLOADER_TOKEN},
+                    {"X-Local-Uploader-Token": _token()},
                     None,
                 )
                 job = (data.get("job") or None) if isinstance(data, dict) else None
             except Exception:
                 job = None
             if not job:
+                now = time.time()
+                if now - last_idle >= 60:
+                    print("[local_uploader] idle (no pending upload jobs)")
+                    last_idle = now
                 await asyncio.sleep(5)
                 continue
+            try:
+                print(f"[local_uploader] claimed video_id={job.get('id')} local_filename={job.get('local_filename')}")
+            except Exception:
+                pass
             await _process_job(client, base_url, job)
             await asyncio.sleep(1)
 

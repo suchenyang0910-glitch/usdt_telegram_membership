@@ -11,6 +11,7 @@ import secrets
 import socket
 import threading
 import time
+import shutil
 from datetime import datetime, timedelta
 from decimal import Decimal
 from http import HTTPStatus
@@ -495,18 +496,21 @@ INDEX_HTML = """<!doctype html>
         </div>
         <div style="height:12px"></div>
         <div class="panel">
-          <div class="muted">视频上传（创建上传任务，本地 userbot 拉取并上传到频道后回填链接）</div>
+          <div class="muted">视频上传（浏览器先上传到服务器，再由服务器 userbot 发送到收费频道并裁剪免费片段）</div>
           <input id="vEditId" placeholder="video_id(编辑用)" style="min-width:220px;display:none" />
           <div class="row" style="margin-top:10px">
-            <input id="vLocal" placeholder="本地文件名（local userbot 识别）" style="min-width:320px" />
-            <input id="vVideoFile" type="file" accept="video/*" style="min-width:320px" onchange="useSelectedVideoName()" />
+            <input id="vLocal" placeholder="文件名" style="min-width:320px" />
+            <input id="vVideoFile" type="file" accept="video/*" style="min-width:320px" />
+            <button onclick="uploadVideoToServer()">上传视频到服务器</button>
             <select id="vCategorySel" style="min-width:220px;padding:10px;border-radius:10px;border:1px solid #ccc">
               <option value="0">请选择分类</option>
             </select>
             <input id="vSort" placeholder="排序(越大越靠前)" style="min-width:160px" />
             <label class="muted"><input id="vPub" type="checkbox" checked /> 上架</label>
           </div>
-          <div class="muted" style="margin-top:6px">说明：这里不会把视频上传到服务器，只会读取文件名。请把视频文件放到本地 userbot 的 LOCAL_UPLOADER_DIR 目录下。</div>
+          <input id="vServerPath" style="display:none" />
+          <input id="vServerSize" style="display:none" />
+          <div class="muted" style="margin-top:6px" id="vUploadHint">请先选择视频文件并上传到服务器</div>
           <div class="row" style="margin-top:10px">
             <input id="vCover" placeholder="展示图片URL(可选)" style="min-width:420px" />
             <input id="vCoverFile" type="file" accept="image/*" style="min-width:260px" />
@@ -959,6 +963,29 @@ function useSelectedVideoName(){
   document.getElementById("vLocal").value = f.name || "";
 }
 
+async function uploadVideoToServer(){
+  const el = document.getElementById("vVideoFile");
+  const f = el && el.files && el.files[0] ? el.files[0] : null;
+  if(!f){ return; }
+  document.getElementById("vUploadHint").innerText = "上传中...";
+  const fd = new FormData();
+  fd.append("file", f);
+  const r = await fetch("/api/upload_video_file", {method:"POST", body: fd});
+  if(!r.ok){
+    document.getElementById("vUploadHint").innerText = "上传失败：" + (await r.text());
+    return;
+  }
+  const data = await r.json();
+  if(data && data.server_path){
+    document.getElementById("vServerPath").value = data.server_path;
+    document.getElementById("vServerSize").value = String(data.file_size || 0);
+    if(data.original_filename) document.getElementById("vLocal").value = data.original_filename;
+    document.getElementById("vUploadHint").innerText = "已上传到服务器：" + data.server_path + " (" + (data.file_size || 0) + " bytes)";
+  } else {
+    document.getElementById("vUploadHint").innerText = "上传失败：bad response";
+  }
+}
+
 async function loadVideosAdmin(){
   const q = document.getElementById("vQ").value.trim();
   const status = document.getElementById("vStatus").value.trim();
@@ -1099,8 +1126,15 @@ async function toggleVideoPublish(id, pub){
 }
 
 async function createVideoJob(){
+  const server_path = document.getElementById("vServerPath").value.trim();
+  if(!server_path){
+    document.getElementById("vResult").innerText = "请先上传视频到服务器";
+    return;
+  }
   const body = {
     local_filename: document.getElementById("vLocal").value.trim(),
+    server_file_path: server_path,
+    server_file_size: parseInt(document.getElementById("vServerSize").value.trim()||"0",10),
     category_id: parseInt((document.getElementById("vCategorySel").value||"0"),10),
     sort_order: parseInt(document.getElementById("vSort").value.trim()||"0",10),
     is_published: document.getElementById("vPub").checked,
@@ -1674,6 +1708,48 @@ class Handler(BaseHTTPRequestHandler):
             url = _public_base_url(self) + "/uploads/" + rel + "/" + out_name
             return self._send(200, _json_bytes({"ok": True, "url": url}), "application/json; charset=utf-8")
 
+        if path == "/api/upload_video_file":
+            ct = (self.headers.get("Content-Type") or "").strip()
+            if "multipart/form-data" not in ct:
+                return self._send(400, b"bad content-type", "text/plain; charset=utf-8")
+            try:
+                form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": ct})
+            except Exception:
+                return self._send(400, b"bad multipart", "text/plain; charset=utf-8")
+            ff = form["file"] if "file" in form else None
+            if not ff or not getattr(ff, "file", None):
+                return self._send(400, b"missing file", "text/plain; charset=utf-8")
+            filename = (getattr(ff, "filename", "") or "").strip()
+            fn_lower = filename.lower()
+            ext = ""
+            for e in (".mp4", ".mov", ".mkv", ".webm", ".m4v"):
+                if fn_lower.endswith(e):
+                    ext = e
+                    break
+            if not ext:
+                ext = ".mp4"
+            base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp", "video_uploads")
+            rel = f"{datetime.utcnow().strftime('%Y%m%d')}"
+            out_dir = os.path.join(base, rel)
+            os.makedirs(out_dir, exist_ok=True)
+            out_name = secrets.token_hex(16) + ext
+            out_full = os.path.join(out_dir, out_name)
+            try:
+                with open(out_full, "wb") as f:
+                    shutil.copyfileobj(ff.file, f, length=1024 * 1024)
+            except Exception:
+                return self._send(500, b"write failed", "text/plain; charset=utf-8")
+            try:
+                size = int(os.path.getsize(out_full))
+            except Exception:
+                size = 0
+            server_path = os.path.join("tmp", "video_uploads", rel, out_name).replace("\\", "/")
+            return self._send(
+                200,
+                _json_bytes({"ok": True, "server_path": server_path, "original_filename": filename, "file_size": size}),
+                "application/json; charset=utf-8",
+            )
+
         try:
             n = int(self.headers.get("Content-Length") or "0")
         except Exception:
@@ -1738,6 +1814,8 @@ class Handler(BaseHTTPRequestHandler):
                 sort_order=int(data.get("sort_order") or 0),
                 is_published=bool(data.get("is_published")),
                 published_at=dt,
+                server_file_path=(data.get("server_file_path") or "").strip(),
+                server_file_size=int(data.get("server_file_size") or 0),
             )
             return self._send(200, _json_bytes({"ok": True, "id": vid}), "application/json; charset=utf-8")
 
