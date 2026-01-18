@@ -187,7 +187,13 @@ async def main():
     if not PAID_CHANNEL_ID:
         raise SystemExit("PAID_CHANNEL_ID missing")
 
-    init_tables()
+    while True:
+        try:
+            init_tables()
+            break
+        except Exception as e:
+            print(f"[server_uploader] db not ready: {type(e).__name__}: {e}")
+            await asyncio.sleep(5)
 
     name = USERBOT_SESSION_NAME or "tmp/userbot/telethon"
     sess = StringSession(USERBOT_STRING_SESSION)
@@ -199,7 +205,12 @@ async def main():
             if now - last_hb >= 60:
                 _write_heartbeat()
                 last_hb = now
-            job = _claim_next()
+            try:
+                job = _claim_next()
+            except Exception as e:
+                print(f"[server_uploader] db error: {type(e).__name__}: {e}")
+                await asyncio.sleep(5)
+                continue
             if not job:
                 await asyncio.sleep(5)
                 continue
