@@ -11,19 +11,29 @@ from telethon.sessions import StringSession
 
 from bot.captions import compose_free_caption
 from config import (
+    CLIP_DIR,
+    CLIP_RANDOM,
+    CLIP_SECONDS,
+    CLIP_START_OFFSET_SEC,
+    DOWNLOAD_DIR,
     FREE_CHANNEL_IDS,
     HIGHLIGHT_CHANNEL_ID,
     PAID_CHANNEL_ID,
     HEARTBEAT_USERBOT_FILE,
     USERBOT_API_HASH,
     USERBOT_API_ID,
-    USERBOT_CLIP_RANDOM,
-    USERBOT_CLIP_SECONDS,
     USERBOT_SESSION_NAME,
     USERBOT_STRING_SESSION,
 )
 from core.db import get_conn
-from core.models import init_tables, local_uploader_update
+from core.models import (
+    claim_clip_dispatch_takeover,
+    init_tables,
+    local_uploader_update,
+    mark_clip_dispatch_sent,
+    unclaim_clip_dispatch,
+    update_video_free_link,
+)
 
 
 def _work_root() -> str:
@@ -90,6 +100,84 @@ def _clip_targets() -> list[int]:
     return targets
 
 
+def _ensure_dir(p: str):
+    os.makedirs(p, exist_ok=True)
+
+
+def _pick_start(duration: int, clip_len: int) -> int:
+    dur = int(duration or 0)
+    clip_len = max(1, int(clip_len or 0))
+    base = max(0, int(CLIP_START_OFFSET_SEC or 0))
+    if dur <= 0:
+        return 0
+    if dur <= clip_len:
+        return 0
+    if dur <= base + clip_len:
+        return 0
+    if CLIP_RANDOM:
+        return random.randint(base, max(base, dur - clip_len))
+    return base
+
+
+async def _clip_and_send_from_paid_message(client: TelegramClient, paid_msg, caption_src: str) -> tuple[int | None, int | None, int]:
+    if not paid_msg:
+        return None, None, 0
+    if not getattr(paid_msg, "file", None) or not (getattr(paid_msg, "video", None) or (getattr(getattr(paid_msg, "file", None), "mime_type", "") or "").startswith("video/")):
+        return None, None, 0
+
+    _ensure_dir(DOWNLOAD_DIR)
+    _ensure_dir(CLIP_DIR)
+    paid_msg_id = int(getattr(paid_msg, "id", 0) or 0)
+    src = os.path.join(DOWNLOAD_DIR, f"{PAID_CHANNEL_ID}_{paid_msg_id}.mp4")
+    dst = os.path.join(CLIP_DIR, f"{PAID_CHANNEL_ID}_{paid_msg_id}_clip.mp4")
+
+    await client.download_media(paid_msg, file=src)
+    duration = _ffprobe_duration(src)
+    clip_len = int(CLIP_SECONDS or 30)
+    if duration > 0:
+        clip_len = min(clip_len, duration)
+    start = _pick_start(duration, clip_len)
+
+    ok = _clip_video(src, dst, start, clip_len)
+    if not ok:
+        try:
+            os.remove(src)
+        except Exception:
+            pass
+        return None, None, 0
+
+    caption = compose_free_caption(caption_src or "")
+    targets = _clip_targets()
+    first_free: tuple[int | None, int | None] = (None, None)
+    sent = 0
+    for ch in targets:
+        try:
+            if not claim_clip_dispatch_takeover(PAID_CHANNEL_ID, paid_msg_id, int(ch), "server_userbot", 600):
+                continue
+            sent_msg = await client.send_file(int(ch), dst, caption=caption, supports_streaming=True)
+            mark_clip_dispatch_sent(PAID_CHANNEL_ID, paid_msg_id, int(ch))
+            try:
+                update_video_free_link(PAID_CHANNEL_ID, paid_msg_id, int(ch), int(getattr(sent_msg, "id", 0) or 0))
+            except Exception:
+                pass
+            sent += 1
+            if first_free[0] is None:
+                first_free = (int(ch), int(getattr(sent_msg, "id", 0) or 0))
+        except Exception:
+            try:
+                unclaim_clip_dispatch(PAID_CHANNEL_ID, paid_msg_id, int(ch))
+            except Exception:
+                pass
+
+    try:
+        os.remove(src)
+        os.remove(dst)
+    except Exception:
+        pass
+
+    return first_free[0], first_free[1], sent
+
+
 def _claim_next() -> dict | None:
     conn = get_conn()
     cur = conn.cursor(dictionary=True)
@@ -146,24 +234,7 @@ async def _process_job(client: TelegramClient, job: dict):
         except Exception:
             file_id = None
 
-        duration = _ffprobe_duration(src_path)
-        clip_len = int(USERBOT_CLIP_SECONDS or 30)
-        if duration > 0:
-            clip_len = min(clip_len, duration)
-        if duration > clip_len and USERBOT_CLIP_RANDOM:
-            start = random.randint(0, max(0, duration - clip_len))
-        else:
-            start = 0
-        clip_dir = os.path.join(_work_root(), "tmp", "userbot", "clips")
-        os.makedirs(clip_dir, exist_ok=True)
-        clip_path = os.path.join(clip_dir, f"clip_{video_id}_{int(time.time())}.mp4")
-        ok = _clip_video(src_path, clip_path, start, clip_len)
-        free_ch = _clip_targets()[0] if _clip_targets() else None
-        free_msg_id = None
-        if ok and free_ch is not None:
-            free_caption = compose_free_caption(caption)
-            free_sent = await client.send_file(int(free_ch), clip_path, caption=free_caption, supports_streaming=True)
-            free_msg_id = int(getattr(free_sent, "id", 0) or 0)
+        free_ch, free_msg_id, _sent_cnt = await _clip_and_send_from_paid_message(client, sent, caption)
 
         local_uploader_update(
             video_id=video_id,
