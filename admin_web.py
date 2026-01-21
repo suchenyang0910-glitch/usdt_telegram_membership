@@ -9,6 +9,7 @@ import cgi
 import os
 import secrets
 import socket
+import subprocess
 import threading
 import time
 import shutil
@@ -239,6 +240,98 @@ def _public_base_url(handler: BaseHTTPRequestHandler) -> str:
     if not host:
         host = f"{handler.server.server_address[0]}:{handler.server.server_address[1]}"
     return f"{proto}://{host}"
+
+
+def _normalize_cover_for_webapp(handler: BaseHTTPRequestHandler, cover_url: str) -> str | None:
+    s = (cover_url or "").strip()
+    if not s:
+        return None
+    if s.startswith("http://") or s.startswith("https://"):
+        return s
+    if s.startswith("/uploads/"):
+        return _public_base_url(handler) + s
+    if s.startswith("uploads/"):
+        return _public_base_url(handler) + "/" + s
+    if s.startswith("covers/") or s.startswith("banners/") or s.startswith("misc/"):
+        return _public_base_url(handler) + "/uploads/" + s
+    if s.startswith("/"):
+        return _public_base_url(handler) + s
+    return _public_base_url(handler) + "/" + s
+
+
+def _is_private_host(host: str) -> bool:
+    h = (host or "").strip().lower()
+    if not h:
+        return True
+    if h in ("localhost",):
+        return True
+    try:
+        infos = socket.getaddrinfo(h, None)
+    except Exception:
+        return True
+    for info in infos or []:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _try_generate_cover_from_video_url(handler: BaseHTTPRequestHandler, video_url: str) -> str | None:
+    u = (video_url or "").strip()
+    if not (u.startswith("http://") or u.startswith("https://")):
+        return None
+    try:
+        parsed = urlparse(u)
+        host = (parsed.hostname or "").strip()
+    except Exception:
+        return None
+    if _is_private_host(host):
+        return None
+    try:
+        sec = int(os.getenv("COVER_FRAME_SEC", "3") or "3")
+    except Exception:
+        sec = 3
+    sec = max(0, min(sec, 120))
+    folder = f"covers/{datetime.utcnow().strftime('%Y%m%d')}"
+    base = _uploads_dir()
+    out_dir = _safe_join(base, folder)
+    if not out_dir:
+        return None
+    os.makedirs(out_dir, exist_ok=True)
+    out_name = secrets.token_hex(16) + ".jpg"
+    out_full = os.path.join(out_dir, out_name)
+    cmd = ["ffmpeg", "-nostdin", "-y", "-ss", str(sec), "-i", u, "-frames:v", "1", "-q:v", "3", out_full]
+    try:
+        p = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=35, check=False)
+        if p.returncode != 0:
+            try:
+                if os.path.exists(out_full):
+                    os.remove(out_full)
+            except Exception:
+                pass
+            return None
+        if not os.path.exists(out_full) or os.path.getsize(out_full) <= 0:
+            return None
+    except Exception:
+        try:
+            if os.path.exists(out_full):
+                os.remove(out_full)
+        except Exception:
+            pass
+        return None
+    return "/uploads/" + folder + "/" + out_name
+
+
+def _uploads_file_exists(cover_url: str) -> bool:
+    s = (cover_url or "").strip()
+    if not s.startswith("/uploads/"):
+        return False
+    rel = s[len("/uploads/") :]
+    full = _safe_join(_uploads_dir(), rel)
+    return bool(full and os.path.exists(full) and os.path.isfile(full))
 
 
 INDEX_HTML = """<!doctype html>
@@ -1373,7 +1466,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_headers_only(200, "application/json; charset=utf-8", len(body))
 
             if path == "/api/webapp/config":
-                body = _json_bytes({"categories": list_categories(visible_only=True), "banners": list_banners(active_only=True)})
+                banners = list_banners(active_only=True)
+                for b in banners:
+                    b["image_url"] = _normalize_cover_for_webapp(self, b.get("image_url") or "") or (b.get("image_url") or "")
+                body = _json_bytes({"categories": list_categories(visible_only=True), "banners": banners})
                 return self._send_headers_only(200, "application/json; charset=utf-8", len(body))
 
             if path == "/api/webapp/plans":
@@ -1394,6 +1490,7 @@ class Handler(BaseHTTPRequestHandler):
                         is_vip = True
                 data = list_videos(q=q, page=page, limit=limit, category_id=cat_id, sort=sort)
                 for item in data["items"]:
+                    item["cover_url"] = _normalize_cover_for_webapp(self, item.get("cover_url") or "")
                     item["paid_link"] = (item.get("video_url") or "").strip() or None
                     item["free_link"] = (item.get("preview_url") or "").strip() or None
                     if not item["paid_link"] and item.get("channel_id") and item.get("message_id"):
@@ -1456,9 +1553,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, _json_bytes({"user": u, "is_vip": is_vip, "bot_username": BOT_USERNAME}), "application/json; charset=utf-8")
             
             if path == "/api/webapp/config":
+                banners = list_banners(active_only=True)
+                for b in banners:
+                    b["image_url"] = _normalize_cover_for_webapp(self, b.get("image_url") or "") or (b.get("image_url") or "")
                 return self._send(200, _json_bytes({
                     "categories": list_categories(visible_only=True),
-                    "banners": list_banners(active_only=True)
+                    "banners": banners
                 }), "application/json; charset=utf-8")
 
             if path == "/api/webapp/plans":
@@ -1480,6 +1580,7 @@ class Handler(BaseHTTPRequestHandler):
                 
                 data = list_videos(q=q, page=page, limit=limit, category_id=cat_id, sort=sort)
                 for item in data["items"]:
+                    item["cover_url"] = _normalize_cover_for_webapp(self, item.get("cover_url") or "")
                     item["paid_link"] = (item.get("video_url") or "").strip() or None
                     item["free_link"] = (item.get("preview_url") or "").strip() or None
                     if not item["paid_link"] and item.get("channel_id") and item.get("message_id"):
@@ -1894,13 +1995,18 @@ class Handler(BaseHTTPRequestHandler):
                     dt = None
             server_file_path = (data.get("server_file_path") or "").strip()
             video_url = (data.get("video_url") or "").strip()
+            cover_url = (data.get("cover_url") or "").strip()
+            if cover_url and cover_url.startswith("/uploads/") and not _uploads_file_exists(cover_url):
+                cover_url = ""
+            if not cover_url and video_url:
+                cover_url = _try_generate_cover_from_video_url(self, video_url) or ""
             upload_status = "pending"
             if video_url and not server_file_path:
                 upload_status = "done"
             vid = admin_create_video_job(
                 local_filename=(data.get("local_filename") or "").strip(),
                 caption=(data.get("caption") or "").strip(),
-                cover_url=(data.get("cover_url") or "").strip(),
+                cover_url=cover_url,
                 tags=(data.get("tags") or "").strip(),
                 category_id=int(data.get("category_id") or 0),
                 sort_order=int(data.get("sort_order") or 0),
@@ -1923,17 +2029,23 @@ class Handler(BaseHTTPRequestHandler):
                     dt = dt.replace(tzinfo=None)
                 except Exception:
                     dt = None
+            video_url = (data.get("video_url") or "").strip()
+            cover_url = (data.get("cover_url") or "").strip()
+            if cover_url and cover_url.startswith("/uploads/") and not _uploads_file_exists(cover_url):
+                cover_url = ""
+            if not cover_url and video_url:
+                cover_url = _try_generate_cover_from_video_url(self, video_url) or ""
             admin_update_video_meta(
                 video_id=int(data.get("id") or 0),
                 caption=(data.get("caption") or "").strip(),
-                cover_url=(data.get("cover_url") or "").strip(),
+                cover_url=cover_url,
                 tags=(data.get("tags") or "").strip(),
                 category_id=int(data.get("category_id") or 0),
                 sort_order=int(data.get("sort_order") or 0),
                 is_published=bool(data.get("is_published")),
                 published_at=dt,
                 local_filename=(data.get("local_filename") or "").strip(),
-                video_url=(data.get("video_url") or "").strip(),
+                video_url=video_url,
                 preview_url=(data.get("preview_url") or "").strip(),
             )
             return self._send(200, _json_bytes({"ok": True}), "application/json; charset=utf-8")

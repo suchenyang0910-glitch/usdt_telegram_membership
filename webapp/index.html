@@ -250,7 +250,7 @@
 
             div.innerHTML = `
                 <div class="relative aspect-video bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
-                    ${cover ? `<img src="${cover}" class="absolute inset-0 w-full h-full object-cover" />` : `<span class="text-4xl opacity-50">▶️</span>`}
+                    ${cover ? `<img src="${cover}" class="absolute inset-0 w-full h-full object-cover" onerror="this.remove()" />` : `<span class="text-4xl opacity-50">▶️</span>`}
                     ${lockIcon}
                     ${v.is_hot ? '<span class="absolute top-2 left-2 bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded">HOT</span>' : ''}
                 </div>
