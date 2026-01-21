@@ -501,30 +501,30 @@ INDEX_HTML = """<!doctype html>
           <input id="vEditId" placeholder="video_id(编辑用)" style="min-width:220px;display:none" />
           <div class="row" style="margin-top:10px">
             <input id="vLocal" placeholder="文件名" style="min-width:320px" />
-            <input id="vVideoFile" type="file" accept="video/*" style="min-width:320px" />
             <select id="vCategorySel" style="min-width:220px;padding:10px;border-radius:10px;border:1px solid #ccc">
               <option value="0">请选择分类</option>
             </select>
             <input id="vSort" placeholder="排序(越大越靠前)" style="min-width:160px" />
             <label class="muted"><input id="vPub" type="checkbox" checked /> 上架</label>
           </div>
-          <input id="vServerPath" style="display:none" />
-          <input id="vServerSize" style="display:none" />
-          <div class="muted" style="margin-top:6px" id="vUploadHint">选择视频文件后，点击“创建上传任务”会自动上传到服务器</div>
+          <div class="row" style="margin-top:10px">
+            <input id="vVideoUrl" placeholder="视频URL(手动填写)" style="min-width:520px" />
+            <input id="vPreviewUrl" placeholder="试看URL(可选)" style="min-width:520px" />
+          </div>
           <div class="row" style="margin-top:10px">
             <input id="vCover" placeholder="展示图片路径(服务器/可选)" style="min-width:420px" />
             <input id="vCoverFile" type="file" accept="image/*" style="min-width:260px" />
             <input id="vTags" placeholder="标签(逗号分隔,可选)" style="min-width:420px" />
           </div>
           <div class="row" style="margin-top:10px">
-            <input id="vPaidUrl" placeholder="视频URL(收费频道)" style="min-width:520px" readonly />
-            <input id="vFreeUrl" placeholder="视频URL(免费频道)" style="min-width:520px" readonly />
+            <input id="vPaidUrl" placeholder="频道URL(收费/只读)" style="min-width:520px" readonly />
+            <input id="vFreeUrl" placeholder="频道URL(免费/只读)" style="min-width:520px" readonly />
           </div>
           <div class="row" style="margin-top:10px">
             <textarea id="vCaption" placeholder="文案内容（标题/描述）"></textarea>
           </div>
           <div class="row" style="margin-top:10px">
-            <button onclick="createVideoJob()">创建上传任务</button>
+            <button onclick="createVideoJob()">保存</button>
             <button onclick="updateVideo()">保存修改</button>
           </div>
           <div class="muted" id="vResult" style="margin-top:8px"></div>
@@ -974,55 +974,6 @@ async function uploadCoverImage(){
   return r;
 }
 
-function useSelectedVideoName(){
-  const el = document.getElementById("vVideoFile");
-  const f = el && el.files && el.files[0] ? el.files[0] : null;
-  if(!f) return;
-  document.getElementById("vLocal").value = f.name || "";
-}
-
-async function uploadVideoToServer(){
-  const el = document.getElementById("vVideoFile");
-  const f = el && el.files && el.files[0] ? el.files[0] : null;
-  if(!f){ throw new Error("no file"); }
-  document.getElementById("vUploadHint").innerText = "上传中... 0%";
-  const fd = new FormData();
-  fd.append("file", f);
-  const data = await new Promise((resolve, reject)=>{
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/upload_video_file", true);
-    xhr.timeout = 2 * 60 * 60 * 1000;
-    xhr.upload.onprogress = (e)=>{
-      if(!e || !e.lengthComputable){ return; }
-      const pct = Math.floor((e.loaded * 100) / Math.max(1, e.total));
-      document.getElementById("vUploadHint").innerText = "上传中... " + pct + "% (" + e.loaded + "/" + e.total + ")";
-    };
-    xhr.onerror = ()=>reject(new Error("network error"));
-    xhr.ontimeout = ()=>reject(new Error("timeout"));
-    xhr.onload = ()=>{
-      if(xhr.status < 200 || xhr.status >= 300){
-        reject(new Error(xhr.responseText || ("http " + xhr.status)));
-        return;
-      }
-      try{
-        resolve(JSON.parse(xhr.responseText || "{}"));
-      }catch(e){
-        reject(new Error("bad response"));
-      }
-    };
-    xhr.send(fd);
-  });
-  if(data && data.server_path){
-    document.getElementById("vServerPath").value = data.server_path;
-    document.getElementById("vServerSize").value = String(data.file_size || 0);
-    if(data.original_filename) document.getElementById("vLocal").value = data.original_filename;
-    document.getElementById("vUploadHint").innerText = "已上传到服务器：" + data.server_path + " (" + (data.file_size || 0) + " bytes)";
-    return data;
-  }
-  document.getElementById("vUploadHint").innerText = "上传失败：bad response";
-  throw new Error("bad response");
-}
-
 async function loadVideosAdmin(){
   const q = document.getElementById("vQ").value.trim();
   const status = document.getElementById("vStatus").value.trim();
@@ -1050,6 +1001,8 @@ async function loadVideosAdmin(){
     const st = v.upload_status ?? "";
     const paid = (v.channel_id && v.message_id) ? `https://t.me/c/${String(v.channel_id).replace('-100','')}/${v.message_id}` : "";
     const free = (v.free_channel_id && v.free_message_id) ? `https://t.me/c/${String(v.free_channel_id).replace('-100','')}/${v.free_message_id}` : "";
+    const videoUrl = (v.video_url ?? "") || "";
+    const previewUrl = (v.preview_url ?? "") || "";
     const thumb = coverUrl ? `<a href="${coverUrl}" target="_blank"><img src="${coverUrl}" style="width:84px;height:48px;object-fit:cover;border-radius:8px;border:1px solid #eee" /></a>` : "";
     const localName = String(v.local_filename||"");
     return `
@@ -1062,10 +1015,10 @@ async function loadVideosAdmin(){
         <td style="max-width:220px;word-break:break-all">${localName}</td>
         <td style="max-width:360px;word-break:break-all">${thumb}<div>${caption}</div></td>
         <td style="max-width:220px;word-break:break-all">${tags}</td>
-        <td style="max-width:260px;word-break:break-all">${paid ? `<a href="${paid}" target="_blank">${paid}</a>` : ""}</td>
-        <td style="max-width:260px;word-break:break-all">${free ? `<a href="${free}" target="_blank">${free}</a>` : ""}</td>
+        <td style="max-width:260px;word-break:break-all">${videoUrl ? `<a href="${videoUrl}" target="_blank">${videoUrl}</a>` : ""}</td>
+        <td style="max-width:260px;word-break:break-all">${previewUrl ? `<a href="${previewUrl}" target="_blank">${previewUrl}</a>` : ""}</td>
         <td>
-          <button onclick="fillVideoForm('${id}', '${String(caption).replace(/'/g,'&#39;')}', '${String(tags).replace(/'/g,'&#39;')}', '${String(cover).replace(/'/g,'&#39;')}', '${cat}', '${sort}', '${pub}', '${localName.replace(/'/g,'&#39;')}', '${String(paid).replace(/'/g,'&#39;')}', '${String(free).replace(/'/g,'&#39;')}')">编辑</button>
+          <button onclick="fillVideoForm('${id}', '${String(caption).replace(/'/g,'&#39;')}', '${String(tags).replace(/'/g,'&#39;')}', '${String(cover).replace(/'/g,'&#39;')}', '${cat}', '${sort}', '${pub}', '${localName.replace(/'/g,'&#39;')}', '${String(videoUrl).replace(/'/g,'&#39;')}', '${String(previewUrl).replace(/'/g,'&#39;')}', '${String(paid).replace(/'/g,'&#39;')}', '${String(free).replace(/'/g,'&#39;')}')">编辑</button>
           <button onclick="toggleVideoPublish('${id}', ${pub ? 0 : 1})">${pub ? "下架" : "上架"}</button>
         </td>
       </tr>
@@ -1075,7 +1028,7 @@ async function loadVideosAdmin(){
     <table>
       <thead>
         <tr>
-          <th>id</th><th>status</th><th>pub</th><th>sort</th><th>cat</th><th>filename</th><th>caption</th><th>tags</th><th>video_url</th><th>free_url</th><th>op</th>
+          <th>id</th><th>status</th><th>pub</th><th>sort</th><th>cat</th><th>filename</th><th>caption</th><th>tags</th><th>video_url</th><th>preview_url</th><th>op</th>
         </tr>
       </thead>
       <tbody>${rows || ""}</tbody>
@@ -1183,12 +1136,16 @@ async function loadWorldCup(){
   document.getElementById("worldcup").innerHTML = items.length ? html : "<div class='muted'>无数据</div>";
 }
 
-function fillVideoForm(id, caption, tags, cover, cat, sort, pub, local, paidUrl, freeUrl){
+function fillVideoForm(id, caption, tags, cover, cat, sort, pub, local, videoUrl, previewUrl, paidUrl, freeUrl){
   document.getElementById("vEditId").value = id || "";
   document.getElementById("vLocal").value = local || "";
   document.getElementById("vCaption").value = caption || "";
   document.getElementById("vTags").value = tags || "";
   document.getElementById("vCover").value = cover || "";
+  const vu = document.getElementById("vVideoUrl");
+  const pu = document.getElementById("vPreviewUrl");
+  if(vu) vu.value = videoUrl || "";
+  if(pu) pu.value = previewUrl || "";
   document.getElementById("vSort").value = sort || "0";
   document.getElementById("vPub").checked = String(pub) === "1";
   const sel = document.getElementById("vCategorySel");
@@ -1210,6 +1167,11 @@ async function updateVideo(){
       try{ await uploadCoverImage(); }catch(e){}
     }
   }
+  const videoUrl = document.getElementById("vVideoUrl").value.trim();
+  if(!videoUrl){
+    document.getElementById("vResult").innerText = "请填写视频URL";
+    return;
+  }
   const body = {
     id: parseInt(id,10),
     local_filename: document.getElementById("vLocal").value.trim(),
@@ -1218,7 +1180,9 @@ async function updateVideo(){
     is_published: document.getElementById("vPub").checked,
     cover_url: document.getElementById("vCover").value.trim(),
     tags: document.getElementById("vTags").value.trim(),
-    caption: document.getElementById("vCaption").value.trim()
+    caption: document.getElementById("vCaption").value.trim(),
+    video_url: videoUrl,
+    preview_url: document.getElementById("vPreviewUrl").value.trim()
   };
   await jpost("/api/video_update", body);
   document.getElementById("vResult").innerText = "已更新 video_id=" + id;
@@ -1239,20 +1203,15 @@ async function createVideoJob(){
       try{ await uploadCoverImage(); }catch(e){}
     }
   }
-  let server_path = document.getElementById("vServerPath").value.trim();
-  if(!server_path){
-    try{
-      await uploadVideoToServer();
-      server_path = document.getElementById("vServerPath").value.trim();
-    }catch(e){
-      document.getElementById("vResult").innerText = "上传视频失败：" + (e && e.message ? e.message : "");
-      return;
-    }
+  const videoUrl = document.getElementById("vVideoUrl").value.trim();
+  if(!videoUrl){
+    document.getElementById("vResult").innerText = "请填写视频URL";
+    return;
   }
   const body = {
     local_filename: document.getElementById("vLocal").value.trim(),
-    server_file_path: server_path,
-    server_file_size: parseInt(document.getElementById("vServerSize").value.trim()||"0",10),
+    video_url: videoUrl,
+    preview_url: document.getElementById("vPreviewUrl").value.trim(),
     category_id: parseInt((document.getElementById("vCategorySel").value||"0"),10),
     sort_order: parseInt(document.getElementById("vSort").value.trim()||"0",10),
     is_published: document.getElementById("vPub").checked,
@@ -1261,7 +1220,7 @@ async function createVideoJob(){
     caption: document.getElementById("vCaption").value.trim()
   };
   const r = await jpost("/api/video_create", body);
-  document.getElementById("vResult").innerText = "已创建任务 video_id=" + (r.id || "0");
+  document.getElementById("vResult").innerText = "已保存 video_id=" + (r.id || "0");
   document.getElementById("vEditId").value = String(r.id || "");
   await loadVideosAdmin();
 }
@@ -1435,12 +1394,14 @@ class Handler(BaseHTTPRequestHandler):
                         is_vip = True
                 data = list_videos(q=q, page=page, limit=limit, category_id=cat_id, sort=sort)
                 for item in data["items"]:
-                    paid_cid = str(item["channel_id"])
-                    if paid_cid.startswith("-100"):
-                        paid_cid = paid_cid[4:]
-                    item["paid_link"] = f"https://t.me/c/{paid_cid}/{item['message_id']}"
-                    item["free_link"] = None
-                    if item.get("free_channel_id") and item.get("free_message_id"):
+                    item["paid_link"] = (item.get("video_url") or "").strip() or None
+                    item["free_link"] = (item.get("preview_url") or "").strip() or None
+                    if not item["paid_link"] and item.get("channel_id") and item.get("message_id"):
+                        paid_cid = str(item["channel_id"])
+                        if paid_cid.startswith("-100"):
+                            paid_cid = paid_cid[4:]
+                        item["paid_link"] = f"https://t.me/c/{paid_cid}/{item['message_id']}"
+                    if not item["free_link"] and item.get("free_channel_id") and item.get("free_message_id"):
                         free_cid = str(item["free_channel_id"])
                         if free_cid.startswith("-100"):
                             free_cid = free_cid[4:]
@@ -1519,14 +1480,17 @@ class Handler(BaseHTTPRequestHandler):
                 
                 data = list_videos(q=q, page=page, limit=limit, category_id=cat_id, sort=sort)
                 for item in data["items"]:
-                    paid_cid = str(item["channel_id"])
-                    if paid_cid.startswith("-100"): paid_cid = paid_cid[4:]
-                    item["paid_link"] = f"https://t.me/c/{paid_cid}/{item['message_id']}"
-                    
-                    item["free_link"] = None
-                    if item.get("free_channel_id") and item.get("free_message_id"):
+                    item["paid_link"] = (item.get("video_url") or "").strip() or None
+                    item["free_link"] = (item.get("preview_url") or "").strip() or None
+                    if not item["paid_link"] and item.get("channel_id") and item.get("message_id"):
+                        paid_cid = str(item["channel_id"])
+                        if paid_cid.startswith("-100"):
+                            paid_cid = paid_cid[4:]
+                        item["paid_link"] = f"https://t.me/c/{paid_cid}/{item['message_id']}"
+                    if not item["free_link"] and item.get("free_channel_id") and item.get("free_message_id"):
                          free_cid = str(item["free_channel_id"])
-                         if free_cid.startswith("-100"): free_cid = free_cid[4:]
+                         if free_cid.startswith("-100"):
+                             free_cid = free_cid[4:]
                          item["free_link"] = f"https://t.me/c/{free_cid}/{item['free_message_id']}"
                     
                     item["is_locked"] = not is_vip
@@ -1928,6 +1892,11 @@ class Handler(BaseHTTPRequestHandler):
                     dt = dt.replace(tzinfo=None)
                 except Exception:
                     dt = None
+            server_file_path = (data.get("server_file_path") or "").strip()
+            video_url = (data.get("video_url") or "").strip()
+            upload_status = "pending"
+            if video_url and not server_file_path:
+                upload_status = "done"
             vid = admin_create_video_job(
                 local_filename=(data.get("local_filename") or "").strip(),
                 caption=(data.get("caption") or "").strip(),
@@ -1937,8 +1906,11 @@ class Handler(BaseHTTPRequestHandler):
                 sort_order=int(data.get("sort_order") or 0),
                 is_published=bool(data.get("is_published")),
                 published_at=dt,
-                server_file_path=(data.get("server_file_path") or "").strip(),
+                upload_status=upload_status,
+                server_file_path=server_file_path,
                 server_file_size=int(data.get("server_file_size") or 0),
+                video_url=video_url,
+                preview_url=(data.get("preview_url") or "").strip(),
             )
             return self._send(200, _json_bytes({"ok": True, "id": vid}), "application/json; charset=utf-8")
 
@@ -1961,6 +1933,8 @@ class Handler(BaseHTTPRequestHandler):
                 is_published=bool(data.get("is_published")),
                 published_at=dt,
                 local_filename=(data.get("local_filename") or "").strip(),
+                video_url=(data.get("video_url") or "").strip(),
+                preview_url=(data.get("preview_url") or "").strip(),
             )
             return self._send(200, _json_bytes({"ok": True}), "application/json; charset=utf-8")
 
@@ -2163,7 +2137,7 @@ def list_videos(q: str, page: int, limit: int, category_id: int = 0, sort: str =
         
         # Get items
         sql = f"""
-            SELECT id, channel_id, message_id, caption, view_count, category_id, free_channel_id, free_message_id, is_hot, created_at 
+            SELECT id, channel_id, message_id, caption, tags, cover_url, video_url, preview_url, view_count, category_id, free_channel_id, free_message_id, is_hot, created_at 
             FROM videos 
             WHERE {where_str} 
             ORDER BY {order_by} 

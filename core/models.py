@@ -251,6 +251,8 @@ def init_tables():
     _ensure_column(cur, "videos", "error_message", "error_message VARCHAR(256) NULL")
     _ensure_column(cur, "videos", "server_file_path", "server_file_path VARCHAR(512) NULL")
     _ensure_column(cur, "videos", "server_file_size", "server_file_size BIGINT DEFAULT 0")
+    _ensure_column(cur, "videos", "video_url", "video_url VARCHAR(1024) NULL")
+    _ensure_column(cur, "videos", "preview_url", "preview_url VARCHAR(1024) NULL")
     _ensure_index(cur, "videos", "idx_videos_channel_msg", "channel_id, message_id")
     _ensure_index(cur, "videos", "idx_videos_created", "created_at")
     _ensure_index(cur, "videos", "idx_videos_view_count", "view_count")
@@ -1244,13 +1246,13 @@ def user_viewed_tags(telegram_id: int, limit: int = 200) -> list[dict]:
     return out[:50]
 
 
-def admin_create_video_job(local_filename: str, caption: str, cover_url: str, tags: str, category_id: int, sort_order: int, is_published: bool, published_at: datetime | None, server_file_path: str | None = None, server_file_size: int | None = None) -> int:
+def admin_create_video_job(local_filename: str, caption: str, cover_url: str, tags: str, category_id: int, sort_order: int, is_published: bool, published_at: datetime | None, upload_status: str = "pending", server_file_path: str | None = None, server_file_size: int | None = None, video_url: str | None = None, preview_url: str | None = None) -> int:
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
         """
-        INSERT INTO videos (channel_id, message_id, file_id, caption, view_count, category_id, cover_url, tags, is_published, sort_order, published_at, upload_status, local_filename, server_file_path, server_file_size)
-        VALUES (NULL, NULL, NULL, %s, 0, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s)
+        INSERT INTO videos (channel_id, message_id, file_id, caption, view_count, category_id, cover_url, tags, is_published, sort_order, published_at, upload_status, local_filename, server_file_path, server_file_size, video_url, preview_url)
+        VALUES (NULL, NULL, NULL, %s, 0, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             caption or "",
@@ -1260,9 +1262,12 @@ def admin_create_video_job(local_filename: str, caption: str, cover_url: str, ta
             1 if bool(is_published) else 0,
             int(sort_order or 0),
             published_at,
+            (upload_status or "pending").strip()[:16],
             (local_filename or "").strip()[:256] or None,
             (server_file_path or "").strip()[:512] or None,
             int(server_file_size or 0),
+            (video_url or "").strip()[:1024] or None,
+            (preview_url or "").strip()[:1024] or None,
         ),
     )
     vid = int(cur.lastrowid or 0)
@@ -1271,13 +1276,14 @@ def admin_create_video_job(local_filename: str, caption: str, cover_url: str, ta
     return vid
 
 
-def admin_update_video_meta(video_id: int, caption: str, cover_url: str, tags: str, category_id: int, sort_order: int, is_published: bool, published_at: datetime | None, local_filename: str):
+def admin_update_video_meta(video_id: int, caption: str, cover_url: str, tags: str, category_id: int, sort_order: int, is_published: bool, published_at: datetime | None, local_filename: str, video_url: str, preview_url: str):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
         """
         UPDATE videos
-        SET caption=%s, cover_url=%s, tags=%s, category_id=%s, sort_order=%s, is_published=%s, published_at=%s, local_filename=%s
+        SET caption=%s, cover_url=%s, tags=%s, category_id=%s, sort_order=%s, is_published=%s, published_at=%s, local_filename=%s, video_url=%s, preview_url=%s,
+            upload_status=IF(%s IS NULL OR %s='', upload_status, 'done')
         WHERE id=%s
         """,
         (
@@ -1289,6 +1295,10 @@ def admin_update_video_meta(video_id: int, caption: str, cover_url: str, tags: s
             1 if bool(is_published) else 0,
             published_at,
             (local_filename or "").strip()[:256] or None,
+            (video_url or "").strip()[:1024] or None,
+            (preview_url or "").strip()[:1024] or None,
+            (video_url or "").strip()[:1024] or None,
+            (video_url or "").strip()[:1024] or None,
             int(video_id),
         ),
     )
@@ -1327,6 +1337,7 @@ def list_videos_admin(q: str, limit: int = 200, status: str | None = None) -> li
     sql = f"""
         SELECT id, caption, cover_url, tags, category_id, sort_order, is_published, published_at, upload_status, local_filename,
                server_file_path, server_file_size,
+               video_url, preview_url,
                channel_id, message_id, free_channel_id, free_message_id, view_count, created_at
         FROM videos
         WHERE {' AND '.join(where)}

@@ -221,6 +221,15 @@
                 `<div class="absolute top-2 right-2 bg-black/60 text-white p-1 rounded-full z-10"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg></div>` 
                 : '';
 
+            const cover = (v.cover_url || '').trim();
+            const tags = (v.tags || '').trim();
+            const hasTgLink = (u)=> typeof u === 'string' && u.includes('t.me/');
+            const openAnyLink = (u)=>{
+                if(!u) return;
+                if(hasTgLink(u)) tg.openTelegramLink(u);
+                else tg.openLink(u);
+            };
+
             // Click handler
             div.onclick = () => {
                 try {
@@ -229,24 +238,25 @@
                 if (v.is_locked) {
                     // If locked, maybe show preview (free link) or prompt upgrade
                     if (v.free_link) {
-                        tg.openTelegramLink(v.free_link);
+                        openAnyLink(v.free_link);
                     } else {
                         // Prompt upgrade
                         openPlans();
                     }
                 } else {
-                    if (v.paid_link) tg.openTelegramLink(v.paid_link);
+                    if (v.paid_link) openAnyLink(v.paid_link);
                 }
             };
 
             div.innerHTML = `
                 <div class="relative aspect-video bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
-                    <span class="text-4xl opacity-50">▶️</span>
+                    ${cover ? `<img src="${cover}" class="absolute inset-0 w-full h-full object-cover" />` : `<span class="text-4xl opacity-50">▶️</span>`}
                     ${lockIcon}
                     ${v.is_hot ? '<span class="absolute top-2 left-2 bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded">HOT</span>' : ''}
                 </div>
                 <div class="p-3">
                     <div class="text-sm font-medium line-clamp-2 leading-tight mb-2">${v.caption || 'No Title'}</div>
+                    ${tags ? `<div class="text-[10px] text-gray-500 line-clamp-1 mb-2">${tags}</div>` : ``}
                     <div class="flex justify-between items-center text-[10px] text-gray-500">
                         <span>${v.view_count || 0} views</span>
                         <span>${date}</span>
