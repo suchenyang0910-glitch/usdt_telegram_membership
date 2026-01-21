@@ -284,6 +284,7 @@ INDEX_HTML = """<!doctype html>
         <a href="#ops" data-page="ops" onclick="showPage('ops')">运营工具</a>
         <a href="#reconcile" data-page="reconcile" onclick="showPage('reconcile')">对账工具</a>
         <a href="#videos" data-page="videos" onclick="showPage('videos')">视频管理</a>
+        <a href="#worldcup" data-page="worldcup" onclick="showPage('worldcup')">世界杯</a>
       </nav>
     </aside>
     <main class="main">
@@ -511,9 +512,13 @@ INDEX_HTML = """<!doctype html>
           <input id="vServerSize" style="display:none" />
           <div class="muted" style="margin-top:6px" id="vUploadHint">选择视频文件后，点击“创建上传任务”会自动上传到服务器</div>
           <div class="row" style="margin-top:10px">
-            <input id="vCover" placeholder="展示图片URL(可选)" style="min-width:420px" />
+            <input id="vCover" placeholder="展示图片路径(服务器/可选)" style="min-width:420px" />
             <input id="vCoverFile" type="file" accept="image/*" style="min-width:260px" />
             <input id="vTags" placeholder="标签(逗号分隔,可选)" style="min-width:420px" />
+          </div>
+          <div class="row" style="margin-top:10px">
+            <input id="vPaidUrl" placeholder="视频URL(收费频道)" style="min-width:520px" readonly />
+            <input id="vFreeUrl" placeholder="视频URL(免费频道)" style="min-width:520px" readonly />
           </div>
           <div class="row" style="margin-top:10px">
             <textarea id="vCaption" placeholder="文案内容（标题/描述）"></textarea>
@@ -523,6 +528,17 @@ INDEX_HTML = """<!doctype html>
             <button onclick="updateVideo()">保存修改</button>
           </div>
           <div class="muted" id="vResult" style="margin-top:8px"></div>
+        </div>
+      </div>
+
+      <div class="page" id="page-worldcup">
+        <h3>世界杯</h3>
+        <div class="panel">
+          <div class="row">
+            <button onclick="loadWorldCup()">刷新</button>
+            <span class="muted" id="wcHint"></span>
+          </div>
+          <div id="worldcup"></div>
         </div>
       </div>
 
@@ -572,7 +588,7 @@ function tableHtml(rows){
 }
 
 function showPage(name){
-  const pages = ["home","miniapp","users","ops","reconcile","videos"];
+  const pages = ["home","miniapp","users","ops","reconcile","videos","worldcup"];
   pages.forEach(p=>{
     const el = document.getElementById("page-"+p);
     if(el) el.classList.toggle("active", p===name);
@@ -584,11 +600,14 @@ function showPage(name){
     try{ loadVideosAdmin(); }catch(e){}
     try{ loadDownloadJobs(); }catch(e){}
   }
+  if(name === "worldcup"){
+    try{ loadWorldCup(); }catch(e){}
+  }
 }
 
 function initPage(){
   const h = (location.hash||"").replace("#","").trim();
-  const pages = new Set(["home","miniapp","users","ops","reconcile","videos"]);
+  const pages = new Set(["home","miniapp","users","ops","reconcile","videos","worldcup"]);
   showPage(pages.has(h)?h:"home");
 }
 
@@ -945,13 +964,13 @@ async function uploadImageFromInput(inputId, folder){
 
 async function uploadBannerImage(){
   const r = await uploadImageFromInput("banFile", "banners");
-  if(r && r.url) document.getElementById("banImg").value = r.url;
+  if(r && (r.path || r.url)) document.getElementById("banImg").value = (r.path || r.url);
   await loadBanners();
 }
 
 async function uploadCoverImage(){
   const r = await uploadImageFromInput("vCoverFile", "covers");
-  if(r && r.url) document.getElementById("vCover").value = r.url;
+  if(r && (r.path || r.url)) document.getElementById("vCover").value = (r.path || r.url);
   return r;
 }
 
@@ -1010,18 +1029,29 @@ async function loadVideosAdmin(){
   const url = "/api/videos_admin?q=" + encodeURIComponent(q) + "&status=" + encodeURIComponent(status) + "&limit=200";
   const data = await jget(url);
   const items = data.items || [];
+  const coverWebPath = (x)=>{
+    const s = String(x||"").trim();
+    if(!s) return "";
+    if(/^https?:\\/\\//.test(s)) return s;
+    if(s.startsWith("/uploads/")) return s;
+    if(s.startsWith("uploads/")) return "/" + s;
+    if(s.startsWith("covers/") || s.startsWith("banners/") || s.startsWith("misc/")) return "/uploads/" + s;
+    return s;
+  };
   const rows = (items || []).map(v => {
     const id = v.id ?? "";
     const caption = v.caption ?? "";
     const tags = v.tags ?? "";
     const cover = v.cover_url ?? "";
+    const coverUrl = coverWebPath(cover);
     const cat = v.category_id ?? 0;
     const sort = v.sort_order ?? 0;
     const pub = v.is_published ? 1 : 0;
     const st = v.upload_status ?? "";
     const paid = (v.channel_id && v.message_id) ? `https://t.me/c/${String(v.channel_id).replace('-100','')}/${v.message_id}` : "";
     const free = (v.free_channel_id && v.free_message_id) ? `https://t.me/c/${String(v.free_channel_id).replace('-100','')}/${v.free_message_id}` : "";
-    const thumb = cover ? `<a href="${cover}" target="_blank"><img src="${cover}" style="width:84px;height:48px;object-fit:cover;border-radius:8px;border:1px solid #eee" /></a>` : "";
+    const thumb = coverUrl ? `<a href="${coverUrl}" target="_blank"><img src="${coverUrl}" style="width:84px;height:48px;object-fit:cover;border-radius:8px;border:1px solid #eee" /></a>` : "";
+    const localName = String(v.local_filename||"");
     return `
       <tr>
         <td>${id}</td>
@@ -1029,11 +1059,13 @@ async function loadVideosAdmin(){
         <td>${pub}</td>
         <td>${sort}</td>
         <td>${cat}</td>
+        <td style="max-width:220px;word-break:break-all">${localName}</td>
         <td style="max-width:360px;word-break:break-all">${thumb}<div>${caption}</div></td>
         <td style="max-width:220px;word-break:break-all">${tags}</td>
-        <td style="max-width:220px;word-break:break-all">${paid ? `<a href="${paid}" target="_blank">paid</a>` : ""} ${free ? `<a href="${free}" target="_blank">free</a>` : ""}</td>
+        <td style="max-width:260px;word-break:break-all">${paid ? `<a href="${paid}" target="_blank">${paid}</a>` : ""}</td>
+        <td style="max-width:260px;word-break:break-all">${free ? `<a href="${free}" target="_blank">${free}</a>` : ""}</td>
         <td>
-          <button onclick="fillVideoForm('${id}', '${String(caption).replace(/'/g,'&#39;')}', '${String(tags).replace(/'/g,'&#39;')}', '${String(cover).replace(/'/g,'&#39;')}', '${cat}', '${sort}', '${pub}', '${String(v.local_filename||'').replace(/'/g,'&#39;')}')">编辑</button>
+          <button onclick="fillVideoForm('${id}', '${String(caption).replace(/'/g,'&#39;')}', '${String(tags).replace(/'/g,'&#39;')}', '${String(cover).replace(/'/g,'&#39;')}', '${cat}', '${sort}', '${pub}', '${localName.replace(/'/g,'&#39;')}', '${String(paid).replace(/'/g,'&#39;')}', '${String(free).replace(/'/g,'&#39;')}')">编辑</button>
           <button onclick="toggleVideoPublish('${id}', ${pub ? 0 : 1})">${pub ? "下架" : "上架"}</button>
         </td>
       </tr>
@@ -1043,7 +1075,7 @@ async function loadVideosAdmin(){
     <table>
       <thead>
         <tr>
-          <th>id</th><th>status</th><th>pub</th><th>sort</th><th>cat</th><th>caption</th><th>tags</th><th>links</th><th>op</th>
+          <th>id</th><th>status</th><th>pub</th><th>sort</th><th>cat</th><th>filename</th><th>caption</th><th>tags</th><th>video_url</th><th>free_url</th><th>op</th>
         </tr>
       </thead>
       <tbody>${rows || ""}</tbody>
@@ -1107,7 +1139,51 @@ async function createDownloadJob(){
   await loadDownloadJobs();
 }
 
-function fillVideoForm(id, caption, tags, cover, cat, sort, pub, local){
+async function loadWorldCup(){
+  const hint = document.getElementById("wcHint");
+  if(hint) hint.innerText = "加载中...";
+  let data = null;
+  try{
+    data = await jget("/api/worldcup");
+  }catch(e){
+    if(hint) hint.innerText = "加载失败";
+    document.getElementById("worldcup").innerHTML = "<div class='muted'>加载失败</div>";
+    return;
+  }
+  if(hint) hint.innerText = (data && data.ts ? ("更新时间: " + data.ts) : "");
+  if(!data || !data.ok){
+    document.getElementById("worldcup").innerHTML = "<div class='muted'>" + (data && data.error ? data.error : "未配置") + "</div>";
+    return;
+  }
+  const items = data.items || [];
+  const rows = items.map(x=>{
+    return `
+      <tr>
+        <td>${x.time||""}</td>
+        <td>${x.status||""}</td>
+        <td>${x.home||""}</td>
+        <td>${x.away||""}</td>
+        <td>${x.score||""}</td>
+        <td>${x.odds_home||""}</td>
+        <td>${x.odds_draw||""}</td>
+        <td>${x.odds_away||""}</td>
+      </tr>
+    `;
+  }).join("");
+  const html = `
+    <table>
+      <thead>
+        <tr>
+          <th>time</th><th>status</th><th>home</th><th>away</th><th>score</th><th>odds_home</th><th>odds_draw</th><th>odds_away</th>
+        </tr>
+      </thead>
+      <tbody>${rows||""}</tbody>
+    </table>
+  `;
+  document.getElementById("worldcup").innerHTML = items.length ? html : "<div class='muted'>无数据</div>";
+}
+
+function fillVideoForm(id, caption, tags, cover, cat, sort, pub, local, paidUrl, freeUrl){
   document.getElementById("vEditId").value = id || "";
   document.getElementById("vLocal").value = local || "";
   document.getElementById("vCaption").value = caption || "";
@@ -1117,12 +1193,23 @@ function fillVideoForm(id, caption, tags, cover, cat, sort, pub, local){
   document.getElementById("vPub").checked = String(pub) === "1";
   const sel = document.getElementById("vCategorySel");
   if(sel) sel.value = String(cat || "0");
+  const p = document.getElementById("vPaidUrl");
+  const f = document.getElementById("vFreeUrl");
+  if(p) p.value = paidUrl || "";
+  if(f) f.value = freeUrl || "";
   document.getElementById("vResult").innerText = "已载入 video_id=" + (id || "");
 }
 
 async function updateVideo(){
   const id = document.getElementById("vEditId").value.trim();
   if(!id) return;
+  if(!document.getElementById("vCover").value.trim()){
+    const el = document.getElementById("vCoverFile");
+    const f = el && el.files && el.files[0] ? el.files[0] : null;
+    if(f){
+      try{ await uploadCoverImage(); }catch(e){}
+    }
+  }
   const body = {
     id: parseInt(id,10),
     local_filename: document.getElementById("vLocal").value.trim(),
@@ -1503,6 +1590,10 @@ class Handler(BaseHTTPRequestHandler):
             body = _json_bytes({"items": list_download_jobs(limit=limit, status=status)})
             return self._send(200, body, "application/json; charset=utf-8")
 
+        if path == "/api/worldcup":
+            body = _json_bytes(worldcup_live())
+            return self._send(200, body, "application/json; charset=utf-8")
+
         if path == "/api/users":
             qs = parse_qs(u.query)
             q = (qs.get("q", [""])[0] or "").strip()
@@ -1733,11 +1824,12 @@ class Handler(BaseHTTPRequestHandler):
             out_full = os.path.join(out_dir, out_name)
             try:
                 with open(out_full, "wb") as f:
-                    f.write(ff.file.read())
+                    shutil.copyfileobj(ff.file, f, length=1024 * 1024)
             except Exception:
                 return self._send(500, b"write failed", "text/plain; charset=utf-8")
-            url = _public_base_url(self) + "/uploads/" + rel + "/" + out_name
-            return self._send(200, _json_bytes({"ok": True, "url": url}), "application/json; charset=utf-8")
+            web_path = "/uploads/" + rel + "/" + out_name
+            url = _public_base_url(self) + web_path
+            return self._send(200, _json_bytes({"ok": True, "url": url, "path": web_path}), "application/json; charset=utf-8")
 
         if path == "/api/upload_video_file":
             ct = (self.headers.get("Content-Type") or "").strip()
@@ -2198,6 +2290,165 @@ def stats() -> dict:
         "hb_app_age_sec": hb_app.get("age_sec"),
         "hb_userbot_age_sec": hb_userbot.get("age_sec"),
     }
+
+
+_WORLDCUP_CACHE: dict = {"ts": 0.0, "data": None}
+
+
+def _http_get_json(url: str, timeout: int = 12) -> object:
+    u = (url or "").strip()
+    if not u:
+        return None
+    req = urlrequest.Request(u, headers={"User-Agent": "pv-admin/1.0"})
+    with urlrequest.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read().decode("utf-8", errors="ignore")
+    try:
+        return json.loads(raw or "null")
+    except Exception:
+        return None
+
+
+def _parse_worldcup_matches(data: object) -> list[dict]:
+    items: list[dict] = []
+    if not isinstance(data, list):
+        return items
+    for m in data:
+        if not isinstance(m, dict):
+            continue
+        home = ""
+        away = ""
+        score = ""
+        status = (m.get("status") or m.get("stage_name") or m.get("time") or "").strip()
+        dt = (m.get("datetime") or m.get("commence_time") or m.get("date") or "").strip()
+        ht = m.get("home_team")
+        at = m.get("away_team")
+        if isinstance(ht, dict):
+            home = str(ht.get("name") or ht.get("country") or ht.get("team_name") or "")
+            hg = ht.get("goals")
+        else:
+            home = str(ht or "")
+            hg = None
+        if isinstance(at, dict):
+            away = str(at.get("name") or at.get("country") or at.get("team_name") or "")
+            ag = at.get("goals")
+        else:
+            away = str(at or "")
+            ag = None
+        if hg is not None or ag is not None:
+            try:
+                score = f"{int(hg or 0)}-{int(ag or 0)}"
+            except Exception:
+                score = f"{hg}-{ag}"
+        items.append(
+            {
+                "time": dt,
+                "status": status,
+                "home": home,
+                "away": away,
+                "score": score,
+            }
+        )
+    return items
+
+
+def _parse_odds(data: object) -> dict[tuple[str, str], dict]:
+    out: dict[tuple[str, str], dict] = {}
+    if not isinstance(data, list):
+        return out
+    for ev in data:
+        if not isinstance(ev, dict):
+            continue
+        home = str(ev.get("home_team") or "").strip()
+        away = str(ev.get("away_team") or "").strip()
+        if not home or not away:
+            continue
+        key = (home.lower(), away.lower())
+        best: dict[str, float] = {}
+        for b in (ev.get("bookmakers") or []):
+            if not isinstance(b, dict):
+                continue
+            for mk in (b.get("markets") or []):
+                if not isinstance(mk, dict):
+                    continue
+                if str(mk.get("key") or "") != "h2h":
+                    continue
+                for oc in (mk.get("outcomes") or []):
+                    if not isinstance(oc, dict):
+                        continue
+                    name = str(oc.get("name") or "").strip().lower()
+                    price = oc.get("price")
+                    try:
+                        p = float(price)
+                    except Exception:
+                        continue
+                    if name not in best or p > best[name]:
+                        best[name] = p
+        out[key] = {
+            "odds_home": best.get(home.lower()),
+            "odds_away": best.get(away.lower()),
+            "odds_draw": best.get("draw"),
+        }
+    return out
+
+
+def worldcup_live() -> dict:
+    now = time.time()
+    cached = _WORLDCUP_CACHE.get("data")
+    ts = float(_WORLDCUP_CACHE.get("ts") or 0.0)
+    ttl = 60.0
+    if cached and (now - ts) < ttl:
+        return cached
+
+    matches_url = (os.getenv("WORLDCUP_MATCHES_URL", "") or "").strip() or "https://worldcupjson.world/matches/current"
+    odds_url = (os.getenv("WORLDCUP_ODDS_URL", "") or "").strip()
+    odds_key = (os.getenv("WORLDCUP_ODDS_API_KEY", "") or "").strip()
+    if odds_url and "{api_key}" in odds_url and odds_key:
+        odds_url = odds_url.replace("{api_key}", odds_key)
+    elif odds_url and odds_key and "apiKey=" not in odds_url and "apikey=" not in odds_url:
+        sep = "&" if ("?" in odds_url) else "?"
+        odds_url = odds_url + f"{sep}apiKey={odds_key}"
+
+    items: list[dict] = []
+    try:
+        matches_raw = _http_get_json(matches_url, timeout=12)
+        items = _parse_worldcup_matches(matches_raw)
+    except Exception as e:
+        fallback = ""
+        if "worldcupjson.net" in matches_url:
+            fallback = matches_url.replace("worldcupjson.net", "worldcupjson.world")
+        elif "worldcupjson.world" in matches_url:
+            fallback = matches_url.replace("worldcupjson.world", "worldcupjson.net")
+        if fallback:
+            try:
+                matches_raw = _http_get_json(fallback, timeout=12)
+                items = _parse_worldcup_matches(matches_raw)
+            except Exception:
+                items = []
+        if not items:
+            err = f"{type(e).__name__}: {e}"
+            out = {"ok": False, "ts": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"), "error": "比赛数据源不可用", "detail": err}
+            _WORLDCUP_CACHE["ts"] = now
+            _WORLDCUP_CACHE["data"] = out
+            return out
+    odds_map: dict[tuple[str, str], dict] = {}
+    if odds_url:
+        try:
+            odds_raw = _http_get_json(odds_url, timeout=12)
+            odds_map = _parse_odds(odds_raw)
+        except Exception:
+            odds_map = {}
+
+    for it in items:
+        k = (str(it.get("home") or "").lower(), str(it.get("away") or "").lower())
+        od = odds_map.get(k) or {}
+        it["odds_home"] = od.get("odds_home")
+        it["odds_draw"] = od.get("odds_draw")
+        it["odds_away"] = od.get("odds_away")
+
+    out = {"ok": True, "ts": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"), "items": items[:200]}
+    _WORLDCUP_CACHE["ts"] = now
+    _WORLDCUP_CACHE["data"] = out
+    return out
 
 
 def list_users(q: str, limit: int) -> list[dict]:
