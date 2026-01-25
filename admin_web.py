@@ -78,6 +78,12 @@ from core.models import (
     poker_balances,
     poker_list_ledgers,
     poker_upsert_player,
+    poker_apply_action,
+    poker_auto_fold_if_timeout,
+    poker_get_or_create_game,
+    poker_join_game,
+    poker_start_game,
+    poker_game_state,
 )
 from bot.payments import compute_new_paid_until
 
@@ -1523,6 +1529,54 @@ class Handler(BaseHTTPRequestHandler):
                 body = _json_bytes({"ok": True, "user": u, "player_id": pid})
                 return self._send_headers_only(200, "application/json; charset=utf-8", len(body))
 
+            if path == "/api/webapp/poker/game_get_or_create":
+                if not user_data:
+                    return self._send_headers_only(401, "text/plain", len(b"Invalid initData"))
+                if not _poker_is_allowed(user_data):
+                    body = _json_bytes({"ok": False, "error": "not allowed"})
+                    return self._send_headers_only(403, "application/json; charset=utf-8", len(body))
+                code = (qs.get("code", ["default"])[0] or "default").strip()
+                r = poker_get_or_create_game(code, int(user_data.get("id")), user_data.get("username"))
+                body = _json_bytes(r)
+                return self._send_headers_only(200, "application/json; charset=utf-8", len(body))
+
+            if path == "/api/webapp/poker/game_join":
+                if not user_data:
+                    return self._send_headers_only(401, "text/plain", len(b"Invalid initData"))
+                if not _poker_is_allowed(user_data):
+                    body = _json_bytes({"ok": False, "error": "not allowed"})
+                    return self._send_headers_only(403, "application/json; charset=utf-8", len(body))
+                code = (qs.get("code", ["default"])[0] or "default").strip()
+                r = poker_join_game(code, int(user_data.get("id")), user_data.get("username"))
+                body = _json_bytes(r)
+                return self._send_headers_only(200, "application/json; charset=utf-8", len(body))
+
+            if path == "/api/webapp/poker/game_start":
+                if not user_data:
+                    return self._send_headers_only(401, "text/plain", len(b"Invalid initData"))
+                if not _poker_is_allowed(user_data):
+                    body = _json_bytes({"ok": False, "error": "not allowed"})
+                    return self._send_headers_only(403, "application/json; charset=utf-8", len(body))
+                gid = int((qs.get("game_id", ["0"])[0] or "0"))
+                r = poker_start_game(gid)
+                body = _json_bytes(r)
+                return self._send_headers_only(200, "application/json; charset=utf-8", len(body))
+
+            if path == "/api/webapp/poker/game_state":
+                if not user_data:
+                    return self._send_headers_only(401, "text/plain", len(b"Invalid initData"))
+                if not _poker_is_allowed(user_data):
+                    body = _json_bytes({"ok": False, "error": "not allowed"})
+                    return self._send_headers_only(403, "application/json; charset=utf-8", len(body))
+                gid = int((qs.get("game_id", ["0"])[0] or "0"))
+                try:
+                    poker_auto_fold_if_timeout(gid)
+                except Exception:
+                    pass
+                r = poker_game_state(gid, int(user_data.get("id")))
+                body = _json_bytes(r)
+                return self._send_headers_only(200, "application/json; charset=utf-8", len(body))
+
             if path == "/api/webapp/poker/balances":
                 if not user_data:
                     return self._send_headers_only(401, "text/plain", len(b"Invalid initData"))
@@ -1964,6 +2018,12 @@ class Handler(BaseHTTPRequestHandler):
                 note = (data.get("note") or "").strip()
                 poker_add_ledger(pid, amt, note)
                 return self._send(200, _json_bytes({"ok": True}), "application/json; charset=utf-8")
+            if path == "/api/webapp/poker/action":
+                gid = int(data.get("game_id") or 0)
+                act = (data.get("action") or "").strip()
+                amt = int(data.get("amount") or 0)
+                r = poker_apply_action(gid, int(user_data.get("id")), act, amt)
+                return self._send(200, _json_bytes(r), "application/json; charset=utf-8")
             return self._send(404, b"Not Found", "text/plain")
 
         if not self._require_auth():
@@ -3500,6 +3560,28 @@ def main():
         raise SystemExit("ADMIN_WEB_USER/ADMIN_WEB_PASS missing")
 
     init_tables()
+    def _poker_watchdog():
+        while True:
+            try:
+                conn = get_conn()
+                cur = conn.cursor()
+                cur.execute("SELECT id FROM poker_games WHERE status='running' ORDER BY id DESC LIMIT 20")
+                rows = cur.fetchall() or []
+                cur.close()
+                conn.close()
+                for r in rows:
+                    try:
+                        poker_auto_fold_if_timeout(int(r[0] or 0))
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            time.sleep(2)
+
+    try:
+        threading.Thread(target=_poker_watchdog, daemon=True).start()
+    except Exception:
+        pass
     httpd = ThreadingHTTPServer((ADMIN_WEB_HOST, int(ADMIN_WEB_PORT)), Handler)
     httpd.serve_forever()
 

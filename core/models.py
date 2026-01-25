@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from config import AMOUNT_EPS, MATCH_ORDER_LOOKBACK_HOURS, MATCH_ORDER_PREFER_RECENT, PLANS
 from core.db import get_conn
+from core.poker import best_hand_rank, new_deck
 
 
 def _utc_now() -> datetime:
@@ -342,6 +343,71 @@ def init_tables():
         """
     )
     _ensure_index(cur, "poker_ledgers", "idx_poker_ledgers_player_time", "player_id, created_at")
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS poker_games (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            code VARCHAR(64) NOT NULL,
+            status VARCHAR(16) DEFAULT 'waiting',
+            max_players INT DEFAULT 6,
+            dealer_seat INT DEFAULT 1,
+            small_blind INT DEFAULT 5,
+            big_blind INT DEFAULT 10,
+            street VARCHAR(16) DEFAULT 'waiting',
+            pot INT DEFAULT 0,
+            current_bet INT DEFAULT 0,
+            turn_seat INT DEFAULT 1,
+            turn_started_at DATETIME NULL,
+            turn_timeout_sec INT DEFAULT 60,
+            board_json TEXT,
+            deck_json TEXT,
+            hand_no INT DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+    )
+    _ensure_index(cur, "poker_games", "idx_poker_games_code_status", "code, status")
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS poker_game_players (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            game_id BIGINT NOT NULL,
+            seat INT NOT NULL,
+            telegram_id BIGINT NOT NULL,
+            username VARCHAR(128),
+            stack INT DEFAULT 0,
+            in_hand TINYINT DEFAULT 1,
+            acted TINYINT DEFAULT 0,
+            bet_street INT DEFAULT 0,
+            hole_json TEXT,
+            joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_pgp_game_seat (game_id, seat),
+            UNIQUE KEY uq_pgp_game_user (game_id, telegram_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+    )
+    _ensure_index(cur, "poker_game_players", "idx_pgp_game", "game_id")
+    _ensure_index(cur, "poker_game_players", "idx_pgp_user", "telegram_id")
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS poker_game_actions (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            game_id BIGINT NOT NULL,
+            hand_no INT NOT NULL,
+            street VARCHAR(16) NOT NULL,
+            seat INT NOT NULL,
+            telegram_id BIGINT NOT NULL,
+            action VARCHAR(16) NOT NULL,
+            amount INT DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+    )
+    _ensure_index(cur, "poker_game_actions", "idx_pga_game_hand", "game_id, hand_no, id")
 
     cur.close()
     try:
@@ -1350,6 +1416,555 @@ def poker_balances() -> list[dict]:
     cur.close()
     conn.close()
     return rows
+
+
+def poker_get_or_create_game(code: str, creator_telegram_id: int, creator_username: str | None, max_players: int = 6, starting_stack: int = 1000, small_blind: int = 5, big_blind: int = 10, turn_timeout_sec: int = 60) -> dict:
+    code2 = (code or "").strip()[:64] or "default"
+    max_players = max(2, min(int(max_players or 6), 6))
+    starting_stack = max(1, min(int(starting_stack or 1000), 1_000_000))
+    sb = max(1, min(int(small_blind or 5), 1_000_000))
+    bb = max(sb, min(int(big_blind or 10), 1_000_000))
+    tsec = max(10, min(int(turn_timeout_sec or 60), 600))
+    conn = get_conn()
+    try:
+        conn.start_transaction()
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT * FROM poker_games WHERE code=%s AND status IN ('waiting','running') ORDER BY id DESC LIMIT 1 FOR UPDATE",
+            (code2,),
+        )
+        g = cur.fetchone()
+        if not g:
+            cur.execute(
+                """
+                INSERT INTO poker_games (code, status, max_players, dealer_seat, small_blind, big_blind, street, pot, current_bet, turn_seat, turn_started_at, turn_timeout_sec, board_json, deck_json, hand_no, updated_at)
+                VALUES (%s,'waiting',%s,1,%s,%s,'waiting',0,0,1,NULL,%s,'[]','[]',0,UTC_TIMESTAMP())
+                """,
+                (code2, max_players, sb, bb, tsec),
+            )
+            gid = int(cur.lastrowid or 0)
+            g = {
+                "id": gid,
+                "code": code2,
+                "status": "waiting",
+                "max_players": max_players,
+                "dealer_seat": 1,
+                "small_blind": sb,
+                "big_blind": bb,
+                "street": "waiting",
+                "pot": 0,
+                "current_bet": 0,
+                "turn_seat": 1,
+                "turn_started_at": None,
+                "turn_timeout_sec": tsec,
+                "board_json": "[]",
+                "deck_json": "[]",
+                "hand_no": 0,
+            }
+        gid = int(g["id"])
+        cur.execute("SELECT seat FROM poker_game_players WHERE game_id=%s AND telegram_id=%s LIMIT 1", (gid, int(creator_telegram_id)))
+        row = cur.fetchone()
+        if not row:
+            cur.execute("SELECT seat FROM poker_game_players WHERE game_id=%s", (gid,))
+            used = set(int(x["seat"]) for x in (cur.fetchall() or []) if int(x.get("seat") or 0))
+            seat = 1
+            while seat in used and seat <= 6:
+                seat += 1
+            if seat <= max_players:
+                cur.execute(
+                    "INSERT IGNORE INTO poker_game_players (game_id, seat, telegram_id, username, stack, in_hand, acted, bet_street, hole_json) VALUES (%s,%s,%s,%s,%s,1,0,0,'[]')",
+                    (gid, seat, int(creator_telegram_id), (creator_username or "")[:128] or None, starting_stack),
+                )
+        conn.commit()
+        return {"ok": True, "game_id": gid, "code": code2}
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def poker_join_game(code: str, telegram_id: int, username: str | None) -> dict:
+    code2 = (code or "").strip()[:64] or "default"
+    conn = get_conn()
+    try:
+        conn.start_transaction()
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT * FROM poker_games WHERE code=%s AND status IN ('waiting','running') ORDER BY id DESC LIMIT 1 FOR UPDATE",
+            (code2,),
+        )
+        g = cur.fetchone()
+        if not g:
+            conn.rollback()
+            return {"ok": False, "error": "no game"}
+        gid = int(g["id"])
+        max_players = int(g.get("max_players") or 6)
+        cur.execute("SELECT seat FROM poker_game_players WHERE game_id=%s AND telegram_id=%s LIMIT 1", (gid, int(telegram_id)))
+        row = cur.fetchone()
+        if row:
+            conn.commit()
+            return {"ok": True, "game_id": gid, "seat": int(row["seat"])}
+        cur.execute("SELECT seat FROM poker_game_players WHERE game_id=%s", (gid,))
+        used = set(int(x["seat"]) for x in (cur.fetchall() or []) if int(x.get("seat") or 0))
+        seat = 1
+        while seat in used and seat <= 6:
+            seat += 1
+        if seat > max_players:
+            conn.rollback()
+            return {"ok": False, "error": "table full"}
+        cur.execute("INSERT INTO poker_game_players (game_id, seat, telegram_id, username, stack, in_hand, acted, bet_street, hole_json) VALUES (%s,%s,%s,%s,%s,1,0,0,'[]')",
+                    (gid, seat, int(telegram_id), (username or "")[:128] or None, 1000))
+        conn.commit()
+        return {"ok": True, "game_id": gid, "seat": seat}
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def poker_start_game(game_id: int) -> dict:
+    gid = int(game_id or 0)
+    if gid <= 0:
+        return {"ok": False, "error": "bad game_id"}
+    conn = get_conn()
+    try:
+        conn.start_transaction()
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT * FROM poker_games WHERE id=%s FOR UPDATE", (gid,))
+        g = cur.fetchone()
+        if not g:
+            conn.rollback()
+            return {"ok": False, "error": "no game"}
+        if (g.get("status") or "") == "running":
+            conn.commit()
+            return {"ok": True}
+        cur.execute("SELECT * FROM poker_game_players WHERE game_id=%s ORDER BY seat ASC", (gid,))
+        players = cur.fetchall() or []
+        if len(players) < 2:
+            conn.rollback()
+            return {"ok": False, "error": "need 2 players"}
+        max_seat = max(int(p.get("seat") or 0) for p in players)
+        dealer = 1
+        while dealer <= max_seat and all(int(p.get("seat") or 0) != dealer for p in players):
+            dealer += 1
+        if dealer > max_seat:
+            dealer = int(players[0].get("seat") or 1)
+        deck = new_deck()
+        board: list[dict] = []
+        hand_no = int(g.get("hand_no") or 0) + 1
+
+        for p in players:
+            hole = [deck.pop(), deck.pop()]
+            cur.execute("UPDATE poker_game_players SET in_hand=1, acted=0, bet_street=0, hole_json=%s WHERE id=%s", (json.dumps(hole, ensure_ascii=False), int(p["id"])))
+
+        sb = int(g.get("small_blind") or 5)
+        bb = int(g.get("big_blind") or 10)
+
+        def next_seat(seat: int) -> int:
+            s = seat
+            for _ in range(12):
+                s += 1
+                if s > max_seat:
+                    s = 1
+                if any(int(pp.get("seat") or 0) == s for pp in players):
+                    return s
+            return seat
+
+        sb_seat = next_seat(dealer)
+        bb_seat = next_seat(sb_seat)
+
+        for seat, blind in ((sb_seat, sb), (bb_seat, bb)):
+            cur.execute("SELECT * FROM poker_game_players WHERE game_id=%s AND seat=%s FOR UPDATE", (gid, int(seat)))
+            p = cur.fetchone()
+            if not p:
+                continue
+            stack = int(p.get("stack") or 0)
+            pay = min(stack, int(blind))
+            cur.execute("UPDATE poker_game_players SET stack=%s, bet_street=%s, acted=1 WHERE id=%s", (stack - pay, pay, int(p["id"])))
+            cur.execute(
+                "INSERT INTO poker_game_actions (game_id, hand_no, street, seat, telegram_id, action, amount) VALUES (%s,%s,'preflop',%s,%s,'blind',%s)",
+                (gid, hand_no, int(seat), int(p.get("telegram_id") or 0), int(pay)),
+            )
+
+        turn_seat = next_seat(bb_seat)
+        cur.execute(
+            """
+            UPDATE poker_games
+            SET status='running', street='preflop', pot=0, current_bet=%s, dealer_seat=%s, turn_seat=%s, turn_started_at=UTC_TIMESTAMP(),
+                board_json=%s, deck_json=%s, hand_no=%s, updated_at=UTC_TIMESTAMP()
+            WHERE id=%s
+            """,
+            (bb, dealer, turn_seat, json.dumps(board, ensure_ascii=False), json.dumps(deck, ensure_ascii=False), hand_no, gid),
+        )
+        conn.commit()
+        return {"ok": True}
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def poker_game_state(game_id: int, requester_telegram_id: int) -> dict:
+    gid = int(game_id or 0)
+    rid = int(requester_telegram_id or 0)
+    conn = get_conn()
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT * FROM poker_games WHERE id=%s", (gid,))
+        g = cur.fetchone()
+        if not g:
+            return {"ok": False, "error": "no game"}
+        cur.execute("SELECT * FROM poker_game_players WHERE game_id=%s ORDER BY seat ASC", (gid,))
+        players = cur.fetchall() or []
+        me = next((p for p in players if int(p.get("telegram_id") or 0) == rid), None)
+        items = []
+        for p in players:
+            hole = []
+            if me and int(me.get("seat") or 0) == int(p.get("seat") or 0):
+                try:
+                    hole = json.loads(p.get("hole_json") or "[]") or []
+                except Exception:
+                    hole = []
+            items.append(
+                {
+                    "seat": int(p.get("seat") or 0),
+                    "telegram_id": int(p.get("telegram_id") or 0),
+                    "username": p.get("username"),
+                    "stack": int(p.get("stack") or 0),
+                    "in_hand": int(p.get("in_hand") or 0),
+                    "acted": int(p.get("acted") or 0),
+                    "bet_street": int(p.get("bet_street") or 0),
+                    "is_turn": int(g.get("turn_seat") or 0) == int(p.get("seat") or 0),
+                    "hole": hole,
+                }
+            )
+        try:
+            board = json.loads(g.get("board_json") or "[]") or []
+        except Exception:
+            board = []
+        return {
+            "ok": True,
+            "game": {
+                "id": int(g.get("id") or 0),
+                "code": g.get("code"),
+                "status": g.get("status"),
+                "street": g.get("street"),
+                "dealer_seat": int(g.get("dealer_seat") or 0),
+                "turn_seat": int(g.get("turn_seat") or 0),
+                "turn_started_at": g.get("turn_started_at"),
+                "turn_timeout_sec": int(g.get("turn_timeout_sec") or 60),
+                "pot": int(g.get("pot") or 0),
+                "current_bet": int(g.get("current_bet") or 0),
+                "small_blind": int(g.get("small_blind") or 0),
+                "big_blind": int(g.get("big_blind") or 0),
+                "hand_no": int(g.get("hand_no") or 0),
+                "board": board,
+            },
+            "me": {"seat": int(me.get("seat") or 0)} if me else None,
+            "players": items,
+        }
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _poker_next_active_seat(seats: list[int], active: set[int], start: int) -> int | None:
+    if not seats:
+        return None
+    s = start
+    for _ in range(len(seats) + 2):
+        i = seats.index(s) if s in seats else -1
+        s = seats[(i + 1) % len(seats)] if i >= 0 else seats[0]
+        if s in active:
+            return s
+    return None
+
+
+def _poker_betting_complete(players: list[dict], current_bet: int) -> bool:
+    active = [p for p in players if int(p.get("in_hand") or 0) == 1]
+    if len(active) <= 1:
+        return True
+    for p in active:
+        if int(p.get("acted") or 0) != 1:
+            return False
+        if int(p.get("bet_street") or 0) != int(current_bet or 0):
+            return False
+    return True
+
+
+def _poker_advance_street(cur, g: dict, players: list[dict]) -> bool:
+    gid = int(g["id"])
+    street = (g.get("street") or "").strip()
+    try:
+        deck = json.loads(g.get("deck_json") or "[]") or []
+    except Exception:
+        deck = []
+    try:
+        board = json.loads(g.get("board_json") or "[]") or []
+    except Exception:
+        board = []
+    if not deck:
+        return False
+
+    def burn_one():
+        if deck:
+            deck.pop()
+
+    if street == "preflop":
+        burn_one()
+        board.extend([deck.pop(), deck.pop(), deck.pop()])
+        next_street = "flop"
+    elif street == "flop":
+        burn_one()
+        board.append(deck.pop())
+        next_street = "turn"
+    elif street == "turn":
+        burn_one()
+        board.append(deck.pop())
+        next_street = "river"
+    else:
+        next_street = "showdown"
+
+    for p in players:
+        cur.execute("UPDATE poker_game_players SET acted=0, bet_street=0 WHERE id=%s", (int(p["id"]),))
+    cur.execute("UPDATE poker_games SET street=%s, current_bet=0, board_json=%s, deck_json=%s WHERE id=%s", (next_street, json.dumps(board, ensure_ascii=False), json.dumps(deck, ensure_ascii=False), gid))
+    return True
+
+
+def _poker_award_pot(cur, g: dict, players: list[dict]) -> dict:
+    gid = int(g["id"])
+    hand_no = int(g.get("hand_no") or 0)
+    try:
+        board = json.loads(g.get("board_json") or "[]") or []
+    except Exception:
+        board = []
+    active = [p for p in players if int(p.get("in_hand") or 0) == 1]
+    pot = int(g.get("pot") or 0) + sum(int(p.get("bet_street") or 0) for p in players)
+    for p in players:
+        cur.execute("UPDATE poker_game_players SET bet_street=0 WHERE id=%s", (int(p["id"]),))
+    if len(active) == 1:
+        w = active[0]
+        cur.execute("UPDATE poker_game_players SET stack=stack+%s WHERE id=%s", (pot, int(w["id"])))
+        cur.execute("UPDATE poker_games SET pot=0, status='waiting', street='waiting', current_bet=0, updated_at=UTC_TIMESTAMP() WHERE id=%s", (gid,))
+        cur.execute(
+            "INSERT INTO poker_game_actions (game_id, hand_no, street, seat, telegram_id, action, amount) VALUES (%s,%s,'showdown',%s,%s,'win',%s)",
+            (gid, hand_no, int(w.get("seat") or 0), int(w.get("telegram_id") or 0), pot),
+        )
+        return {"winner_seat": int(w.get("seat") or 0), "pot": pot}
+    ranks = []
+    for p in active:
+        try:
+            hole = json.loads(p.get("hole_json") or "[]") or []
+        except Exception:
+            hole = []
+        r = best_hand_rank(list(board) + list(hole))
+        ranks.append((r, p))
+    ranks.sort(key=lambda x: x[0], reverse=True)
+    best = ranks[0][0]
+    winners = [p for r, p in ranks if r == best]
+    share = pot // max(1, len(winners))
+    for w in winners:
+        cur.execute("UPDATE poker_game_players SET stack=stack+%s WHERE id=%s", (share, int(w["id"])))
+        cur.execute(
+            "INSERT INTO poker_game_actions (game_id, hand_no, street, seat, telegram_id, action, amount) VALUES (%s,%s,'showdown',%s,%s,'win',%s)",
+            (gid, hand_no, int(w.get("seat") or 0), int(w.get("telegram_id") or 0), share),
+        )
+    cur.execute("UPDATE poker_games SET pot=0, status='waiting', street='waiting', current_bet=0, updated_at=UTC_TIMESTAMP() WHERE id=%s", (gid,))
+    return {"winner_seats": [int(w.get("seat") or 0) for w in winners], "pot": pot}
+
+
+def poker_apply_action(game_id: int, telegram_id: int, action: str, amount: int | None = None) -> dict:
+    gid = int(game_id or 0)
+    uid = int(telegram_id or 0)
+    act = (action or "").strip().lower()
+    amt = int(amount or 0)
+    conn = get_conn()
+    try:
+        conn.start_transaction()
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT * FROM poker_games WHERE id=%s FOR UPDATE", (gid,))
+        g = cur.fetchone()
+        if not g:
+            conn.rollback()
+            return {"ok": False, "error": "no game"}
+        if (g.get("status") or "") != "running":
+            conn.rollback()
+            return {"ok": False, "error": "not running"}
+        street = (g.get("street") or "").strip()
+        cur_bet = int(g.get("current_bet") or 0)
+        turn_seat = int(g.get("turn_seat") or 0)
+        hand_no = int(g.get("hand_no") or 0)
+
+        cur.execute("SELECT * FROM poker_game_players WHERE game_id=%s ORDER BY seat ASC FOR UPDATE", (gid,))
+        players = cur.fetchall() or []
+        me = next((p for p in players if int(p.get("telegram_id") or 0) == uid), None)
+        if not me:
+            conn.rollback()
+            return {"ok": False, "error": "not in game"}
+        if int(me.get("seat") or 0) != turn_seat:
+            conn.rollback()
+            return {"ok": False, "error": "not your turn"}
+        if int(me.get("in_hand") or 0) != 1:
+            conn.rollback()
+            return {"ok": False, "error": "folded"}
+
+        my_bet = int(me.get("bet_street") or 0)
+        to_call = max(0, cur_bet - my_bet)
+        if act == "fold":
+            cur.execute("UPDATE poker_game_players SET in_hand=0, acted=1 WHERE id=%s", (int(me["id"]),))
+            cur.execute("INSERT INTO poker_game_actions (game_id, hand_no, street, seat, telegram_id, action, amount) VALUES (%s,%s,%s,%s,%s,'fold',0)",
+                        (gid, hand_no, street, int(me.get("seat") or 0), uid))
+        elif act == "check":
+            if to_call != 0:
+                conn.rollback()
+                return {"ok": False, "error": "cannot check"}
+            cur.execute("UPDATE poker_game_players SET acted=1 WHERE id=%s", (int(me["id"]),))
+            cur.execute("INSERT INTO poker_game_actions (game_id, hand_no, street, seat, telegram_id, action, amount) VALUES (%s,%s,%s,%s,%s,'check',0)",
+                        (gid, hand_no, street, int(me.get("seat") or 0), uid))
+        elif act == "call":
+            if to_call <= 0:
+                conn.rollback()
+                return {"ok": False, "error": "nothing to call"}
+            stack = int(me.get("stack") or 0)
+            pay = min(stack, to_call)
+            cur.execute("UPDATE poker_game_players SET stack=%s, bet_street=%s, acted=1 WHERE id=%s", (stack - pay, my_bet + pay, int(me["id"])))
+            cur.execute("INSERT INTO poker_game_actions (game_id, hand_no, street, seat, telegram_id, action, amount) VALUES (%s,%s,%s,%s,%s,'call',%s)",
+                        (gid, hand_no, street, int(me.get("seat") or 0), uid, int(pay)))
+        elif act == "raise":
+            raise_to = int(amt or 0)
+            if raise_to <= cur_bet:
+                conn.rollback()
+                return {"ok": False, "error": "bad raise"}
+            stack = int(me.get("stack") or 0)
+            need = max(0, raise_to - my_bet)
+            pay = min(stack, need)
+            new_bet = my_bet + pay
+            cur.execute("UPDATE poker_game_players SET stack=%s, bet_street=%s, acted=1 WHERE id=%s", (stack - pay, new_bet, int(me["id"])))
+            cur.execute("UPDATE poker_game_players SET acted=0 WHERE game_id=%s AND in_hand=1", (gid,))
+            cur.execute("UPDATE poker_game_players SET acted=1 WHERE id=%s", (int(me["id"]),))
+            cur.execute("UPDATE poker_games SET current_bet=%s WHERE id=%s", (new_bet, gid))
+            cur.execute("INSERT INTO poker_game_actions (game_id, hand_no, street, seat, telegram_id, action, amount) VALUES (%s,%s,%s,%s,%s,'raise',%s)",
+                        (gid, hand_no, street, int(me.get("seat") or 0), uid, int(pay)))
+            cur_bet = new_bet
+        else:
+            conn.rollback()
+            return {"ok": False, "error": "bad action"}
+
+        cur.execute("SELECT * FROM poker_game_players WHERE game_id=%s ORDER BY seat ASC", (gid,))
+        players2 = cur.fetchall() or []
+        seats = [int(p.get("seat") or 0) for p in players2 if int(p.get("seat") or 0)]
+        active = set(int(p.get("seat") or 0) for p in players2 if int(p.get("in_hand") or 0) == 1)
+        if len(active) <= 1:
+            res = _poker_award_pot(cur, g, players2)
+            conn.commit()
+            return {"ok": True, "hand_result": res}
+
+        if _poker_betting_complete(players2, cur_bet):
+            if street == "river":
+                res = _poker_award_pot(cur, g, players2)
+                conn.commit()
+                return {"ok": True, "hand_result": res}
+            _poker_advance_street(cur, g, players2)
+            cur.execute("SELECT * FROM poker_games WHERE id=%s", (gid,))
+            g2 = cur.fetchone() or g
+            street2 = (g2.get("street") or "").strip()
+            dealer = int(g2.get("dealer_seat") or 1)
+            first = _poker_next_active_seat(seats, active, dealer) or dealer
+            cur.execute("UPDATE poker_games SET turn_seat=%s, turn_started_at=UTC_TIMESTAMP(), updated_at=UTC_TIMESTAMP() WHERE id=%s", (int(first), gid))
+            conn.commit()
+            return {"ok": True, "street": street2}
+
+        next_seat = _poker_next_active_seat(seats, active, int(me.get("seat") or 0))
+        if not next_seat:
+            res = _poker_award_pot(cur, g, players2)
+            conn.commit()
+            return {"ok": True, "hand_result": res}
+        cur.execute("UPDATE poker_games SET turn_seat=%s, turn_started_at=UTC_TIMESTAMP(), updated_at=UTC_TIMESTAMP() WHERE id=%s", (int(next_seat), gid))
+        conn.commit()
+        return {"ok": True}
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def poker_auto_fold_if_timeout(game_id: int) -> bool:
+    gid = int(game_id or 0)
+    if gid <= 0:
+        return False
+    conn = get_conn()
+    try:
+        conn.start_transaction()
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT * FROM poker_games WHERE id=%s FOR UPDATE", (gid,))
+        g = cur.fetchone()
+        if not g or (g.get("status") or "") != "running":
+            conn.rollback()
+            return False
+        tsec = int(g.get("turn_timeout_sec") or 60)
+        started = g.get("turn_started_at")
+        if not started:
+            conn.rollback()
+            return False
+        age = (datetime.utcnow() - started).total_seconds()
+        if age < float(tsec):
+            conn.rollback()
+            return False
+        seat = int(g.get("turn_seat") or 0)
+        cur.execute("SELECT telegram_id FROM poker_game_players WHERE game_id=%s AND seat=%s LIMIT 1", (gid, seat))
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            return False
+        uid = int(row.get("telegram_id") or 0)
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    try:
+        poker_apply_action(gid, uid, "fold", 0)
+        return True
+    except Exception:
+        return False
+
 
 
 def admin_create_video_job(local_filename: str, caption: str, cover_url: str, tags: str, category_id: int, sort_order: int, is_published: bool, published_at: datetime | None, upload_status: str = "pending", server_file_path: str | None = None, server_file_size: int | None = None, video_url: str | None = None, preview_url: str | None = None) -> int:

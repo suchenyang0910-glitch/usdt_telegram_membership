@@ -33,6 +33,65 @@
     </div>
 
     <div class="card rounded-xl p-4 space-y-3">
+      <div class="flex items-center justify-between">
+        <div class="text-sm font-semibold">牌局</div>
+        <button class="btn-ghost px-3 py-1.5 rounded-lg text-xs" onclick="toggleVoice()" id="voiceBtn">语音:关</button>
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <input id="code" placeholder="房间号(默认 holiday)" class="p-2 rounded-lg border border-gray-200 bg-white text-sm" />
+        <input id="gid" placeholder="game_id" class="p-2 rounded-lg border border-gray-200 bg-white text-sm" readonly />
+      </div>
+      <div class="flex gap-2">
+        <button class="btn-ghost flex-1 py-2 rounded-lg text-sm font-bold" onclick="getOrCreateGame()">创建/获取</button>
+        <button class="btn-ghost flex-1 py-2 rounded-lg text-sm font-bold" onclick="joinGame()">加入</button>
+        <button class="btn-primary flex-1 py-2 rounded-lg text-sm font-bold" onclick="startGame()">开始</button>
+      </div>
+      <div class="text-xs text-gray-500" id="gameHint"></div>
+    </div>
+
+    <div class="card rounded-xl p-4 space-y-3">
+      <div class="text-sm font-semibold">德州流程</div>
+      <div class="grid grid-cols-2 gap-2 text-xs text-gray-600">
+        <div>街道：<span id="street">-</span></div>
+        <div>底池：<span id="pot">-</span></div>
+        <div>当前下注：<span id="curBet">-</span></div>
+        <div>庄位：<span id="dealer">-</span></div>
+      </div>
+      <div class="flex items-center justify-between">
+        <div class="text-xs text-gray-600">轮到：<span class="font-bold" id="turnWho">-</span></div>
+        <div class="text-xs text-gray-600">倒计时：<span class="font-bold" id="countdown">-</span></div>
+      </div>
+
+      <div class="space-y-2">
+        <div class="text-xs text-gray-500">公共牌</div>
+        <div id="board" class="flex gap-2 flex-wrap"></div>
+      </div>
+
+      <div class="space-y-2">
+        <div class="text-xs text-gray-500">我的手牌</div>
+        <div id="hole" class="flex gap-2"></div>
+      </div>
+
+      <div class="space-y-2">
+        <div class="text-xs text-gray-500">座位</div>
+        <div id="seats" class="text-xs text-gray-500">加载中...</div>
+      </div>
+
+      <div class="space-y-2" id="actionBox" style="display:none">
+        <div class="text-xs text-gray-500">我的操作（1分钟内不操作自动弃牌）</div>
+        <div class="flex gap-2">
+          <button class="btn-ghost flex-1 py-2 rounded-lg text-sm font-bold" onclick="actFold()">弃牌</button>
+          <button class="btn-ghost flex-1 py-2 rounded-lg text-sm font-bold" onclick="actCheck()">过牌</button>
+          <button class="btn-ghost flex-1 py-2 rounded-lg text-sm font-bold" onclick="actCall()">跟注</button>
+        </div>
+        <div class="flex gap-2">
+          <input id="raiseTo" placeholder="加注到(总下注)" class="p-2 rounded-lg border border-gray-200 bg-white text-sm flex-1" />
+          <button class="btn-primary px-4 py-2 rounded-lg text-sm font-bold" onclick="actRaise()">加注</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card rounded-xl p-4 space-y-3">
       <div class="text-sm font-semibold">记账</div>
       <div class="grid grid-cols-2 gap-2">
         <input id="amt" placeholder="金额(+/-)" class="p-2 rounded-lg border border-gray-200 bg-white text-sm" />
@@ -54,27 +113,6 @@
       </div>
       <div id="ledgers" class="text-xs text-gray-500">加载中...</div>
     </div>
-
-    <div class="card rounded-xl p-4 space-y-3">
-      <div class="text-sm font-semibold">牌面展示</div>
-      <div class="flex gap-2 flex-wrap">
-        <button class="btn-ghost px-3 py-1.5 rounded-lg text-xs" onclick="resetDeal()">重置</button>
-        <button class="btn-ghost px-3 py-1.5 rounded-lg text-xs" onclick="dealHole()">发手牌</button>
-        <button class="btn-ghost px-3 py-1.5 rounded-lg text-xs" onclick="dealFlop()">翻牌</button>
-        <button class="btn-ghost px-3 py-1.5 rounded-lg text-xs" onclick="dealTurn()">转牌</button>
-        <button class="btn-ghost px-3 py-1.5 rounded-lg text-xs" onclick="dealRiver()">河牌</button>
-      </div>
-      <div class="space-y-2">
-        <div>
-          <div class="text-xs text-gray-500 mb-1">我的手牌</div>
-          <div id="hole" class="flex gap-2"></div>
-        </div>
-        <div>
-          <div class="text-xs text-gray-500 mb-1">公共牌</div>
-          <div id="board" class="flex gap-2 flex-wrap"></div>
-        </div>
-      </div>
-    </div>
   </div>
 
   <script>
@@ -84,9 +122,45 @@
     const API_BASE = '/api/webapp/poker';
 
     let me = null;
-    let deck = [];
-    let hole = [];
-    let board = [];
+    let voiceOn = (localStorage.getItem('poker_voice') || '') === '1';
+    let gameId = 0;
+    let lastTurnSeat = null;
+    let countdownTimer = null;
+    let pollTimer = null;
+
+    function updateVoiceBtn(){
+      document.getElementById('voiceBtn').innerText = voiceOn ? '语音:开' : '语音:关';
+    }
+    function toggleVoice(){
+      voiceOn = !voiceOn;
+      localStorage.setItem('poker_voice', voiceOn ? '1' : '0');
+      updateVoiceBtn();
+      if(voiceOn) trySpeak('语音提示已开启');
+    }
+    function trySpeak(text){
+      if(!voiceOn) return;
+      try{
+        if('speechSynthesis' in window){
+          window.speechSynthesis.cancel();
+          const u = new SpeechSynthesisUtterance(text);
+          u.lang = 'zh-CN';
+          u.rate = 1;
+          window.speechSynthesis.speak(u);
+          return;
+        }
+      }catch(e){}
+      try{
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sine';
+        o.frequency.value = 880;
+        g.gain.value = 0.02;
+        o.connect(g); g.connect(ctx.destination);
+        o.start();
+        setTimeout(()=>{ o.stop(); ctx.close(); }, 250);
+      }catch(e){}
+    }
 
     function suitSym(s){
       if(s==='S') return '♠';
@@ -97,67 +171,24 @@
     }
     function cardText(c){
       if(!c) return '';
-      return c.rank + suitSym(c.suit);
+      return (c.r||'?') + suitSym(c.s||'?');
     }
     function cardEl(c){
       const t = document.createElement('div');
       t.className = 'w-12 h-16 rounded-lg border border-gray-200 bg-white flex items-center justify-center font-bold text-sm';
       t.innerText = cardText(c);
-      if(c && (c.suit==='H' || c.suit==='D')) t.style.color = '#ef4444';
+      if(c && (c.s==='H' || c.s==='D')) t.style.color = '#ef4444';
       return t;
     }
-    function renderCards(){
-      const holeEl = document.getElementById('hole');
-      const boardEl = document.getElementById('board');
-      holeEl.innerHTML = '';
-      boardEl.innerHTML = '';
-      hole.forEach(c=>holeEl.appendChild(cardEl(c)));
-      board.forEach(c=>boardEl.appendChild(cardEl(c)));
+    function renderBoard(board){
+      const el = document.getElementById('board');
+      el.innerHTML = '';
+      (board||[]).forEach(c=>el.appendChild(cardEl(c)));
     }
-    function newDeck(){
-      const suits = ['S','H','D','C'];
-      const ranks = ['A','K','Q','J','T','9','8','7','6','5','4','3','2'];
-      const d = [];
-      suits.forEach(s=>ranks.forEach(r=>d.push({suit:s, rank:r})));
-      for(let i=d.length-1;i>0;i--){
-        const j = Math.floor(Math.random()*(i+1));
-        const tmp = d[i]; d[i]=d[j]; d[j]=tmp;
-      }
-      return d;
-    }
-    function drawOne(){
-      return deck.length ? deck.pop() : null;
-    }
-    function resetDeal(){
-      deck = newDeck();
-      hole = [];
-      board = [];
-      renderCards();
-    }
-    function dealHole(){
-      if(hole.length) return;
-      if(!deck.length) resetDeal();
-      hole = [drawOne(), drawOne()].filter(Boolean);
-      renderCards();
-    }
-    function dealFlop(){
-      if(board.length) return;
-      if(!deck.length) resetDeal();
-      if(!hole.length) dealHole();
-      board = [drawOne(), drawOne(), drawOne()].filter(Boolean);
-      renderCards();
-    }
-    function dealTurn(){
-      if(board.length < 3) dealFlop();
-      if(board.length >= 4) return;
-      board.push(drawOne());
-      renderCards();
-    }
-    function dealRiver(){
-      if(board.length < 4) dealTurn();
-      if(board.length >= 5) return;
-      board.push(drawOne());
-      renderCards();
+    function renderHole(cards){
+      const el = document.getElementById('hole');
+      el.innerHTML = '';
+      (cards||[]).forEach(c=>el.appendChild(cardEl(c)));
     }
 
     async function jget(url){
@@ -178,6 +209,175 @@
         return "<tr class='border-t border-gray-100'>" + cols.map(c=>`<td class='py-1 pr-3 align-top'>${(r[c]??"")}</td>`).join("") + "</tr>";
       }).join("");
       return `<table class="w-full text-xs">${head}${body}</table>`;
+    }
+
+    function parseUtc(ts){
+      const s = String(ts||'').trim();
+      if(!s) return null;
+      if(s.includes('T')) return new Date(s);
+      if(s.includes(' ')) return new Date(s.replace(' ','T') + 'Z');
+      return new Date(s);
+    }
+
+    function renderSeats(players){
+      const el = document.getElementById('seats');
+      if(!players || !players.length){
+        el.innerHTML = "<div class='text-xs text-gray-500'>暂无玩家</div>";
+        return;
+      }
+      const rows = players.map(p=>{
+        const who = p.username || ('uid ' + p.telegram_id);
+        const st = p.in_hand ? '' : '已弃牌';
+        const turn = p.is_turn ? '轮到' : '';
+        const hole = (p.hole||[]).map(cardText).join(' ');
+        const meTag = (me && me.telegram_id === p.telegram_id) ? '（我）' : '';
+        return {
+          seat: p.seat,
+          user: who + meTag,
+          stack: p.stack,
+          bet: p.bet_street,
+          state: [turn, st].filter(Boolean).join(' ')
+        };
+      });
+      el.innerHTML = tableHtml(rows, ['seat','user','stack','bet','state']);
+    }
+
+    async function getOrCreateGame(){
+      const code = (document.getElementById('code').value.trim() || 'holiday');
+      try{
+        const r = await jget(`${API_BASE}/game_get_or_create?code=${encodeURIComponent(code)}`);
+        if(r && r.ok){
+          gameId = parseInt(r.game_id||'0',10) || 0;
+          document.getElementById('gid').value = String(gameId || '');
+          document.getElementById('gameHint').innerText = `房间 ${r.code} game_id=${gameId}`;
+          await pollOnce();
+          startPolling();
+        }else{
+          document.getElementById('gameHint').innerText = (r && r.error) ? r.error : '失败';
+        }
+      }catch(e){
+        document.getElementById('gameHint').innerText = '失败';
+      }
+    }
+
+    async function joinGame(){
+      const code = (document.getElementById('code').value.trim() || 'holiday');
+      try{
+        const r = await jget(`${API_BASE}/game_join?code=${encodeURIComponent(code)}`);
+        if(r && r.ok){
+          gameId = parseInt(r.game_id||'0',10) || 0;
+          document.getElementById('gid').value = String(gameId || '');
+          document.getElementById('gameHint').innerText = `已加入 seat=${r.seat} game_id=${gameId}`;
+          await pollOnce();
+          startPolling();
+        }else{
+          document.getElementById('gameHint').innerText = (r && r.error) ? r.error : '失败';
+        }
+      }catch(e){
+        document.getElementById('gameHint').innerText = '失败';
+      }
+    }
+
+    async function startGame(){
+      if(!gameId){
+        document.getElementById('gameHint').innerText = '请先创建/加入';
+        return;
+      }
+      try{
+        const r = await jget(`${API_BASE}/game_start?game_id=${encodeURIComponent(String(gameId))}`);
+        if(r && r.ok){
+          document.getElementById('gameHint').innerText = '已开始';
+          await pollOnce();
+        }else{
+          document.getElementById('gameHint').innerText = (r && r.error) ? r.error : '失败';
+        }
+      }catch(e){
+        document.getElementById('gameHint').innerText = '失败';
+      }
+    }
+
+    async function pollOnce(){
+      if(!gameId) return;
+      let data = null;
+      try{
+        data = await jget(`${API_BASE}/game_state?game_id=${encodeURIComponent(String(gameId))}`);
+      }catch(e){
+        return;
+      }
+      if(!data || !data.ok) return;
+      const g = data.game || {};
+      const players = data.players || [];
+      document.getElementById('street').innerText = g.street || '-';
+      document.getElementById('pot').innerText = String(g.pot ?? '-');
+      document.getElementById('curBet').innerText = String(g.current_bet ?? '-');
+      document.getElementById('dealer').innerText = String(g.dealer_seat ?? '-');
+      renderBoard(g.board||[]);
+      const mySeat = data.me ? data.me.seat : 0;
+      const meRow = players.find(p=>p.seat===mySeat);
+      renderHole(meRow ? (meRow.hole||[]) : []);
+      renderSeats(players);
+
+      const turnSeat = g.turn_seat || 0;
+      const turnPlayer = players.find(p=>p.seat===turnSeat);
+      const turnName = turnPlayer ? (turnPlayer.username || ('uid ' + turnPlayer.telegram_id)) : '-';
+      document.getElementById('turnWho').innerText = turnName + (turnSeat ? `(#${turnSeat})` : '');
+      const isMyTurn = mySeat && mySeat === turnSeat && (g.status === 'running');
+      document.getElementById('actionBox').style.display = isMyTurn ? '' : 'none';
+
+      if(lastTurnSeat !== null && lastTurnSeat !== turnSeat){
+        trySpeak(`轮到${turnName}`);
+      }
+      lastTurnSeat = turnSeat;
+
+      if(countdownTimer){
+        clearInterval(countdownTimer);
+        countdownTimer = null;
+      }
+      const started = parseUtc(g.turn_started_at);
+      const timeout = parseInt(g.turn_timeout_sec||60,10) || 60;
+      if(started && g.status === 'running' && turnSeat){
+        countdownTimer = setInterval(()=>{
+          const now = new Date();
+          const end = new Date(started.getTime() + timeout * 1000);
+          const left = Math.max(0, Math.floor((end.getTime() - now.getTime())/1000));
+          document.getElementById('countdown').innerText = left + 's';
+          if(left <= 0){
+            if(isMyTurn) document.getElementById('countdown').innerText = '0s(自动弃牌)';
+          }
+        }, 250);
+      }else{
+        document.getElementById('countdown').innerText = '-';
+      }
+    }
+
+    function startPolling(){
+      if(pollTimer) return;
+      pollTimer = setInterval(()=>{ pollOnce(); }, 2000);
+    }
+
+    async function sendAction(action, amount){
+      if(!gameId) return;
+      try{
+        const r = await jpost(`${API_BASE}/action`, { game_id: gameId, action, amount: amount||0 });
+        if(r && r.ok){
+          await pollOnce();
+        }else{
+          tg.showAlert((r && r.error) ? r.error : '操作失败');
+        }
+      }catch(e){
+        tg.showAlert('操作失败');
+      }
+    }
+    function actFold(){ sendAction('fold', 0); }
+    function actCheck(){ sendAction('check', 0); }
+    function actCall(){ sendAction('call', 0); }
+    function actRaise(){
+      const v = parseInt(document.getElementById('raiseTo').value.trim()||'0',10) || 0;
+      if(v<=0){
+        tg.showAlert('请输入加注到的总下注');
+        return;
+      }
+      sendAction('raise', v);
     }
 
     async function loadAuth(){
@@ -250,12 +450,28 @@
     async function refreshAll(){
       await loadBalances();
       await loadLedgers();
+      await pollOnce();
     }
 
     async function init(){
-      resetDeal();
+      updateVoiceBtn();
+      document.getElementById('code').value = localStorage.getItem('poker_code') || 'holiday';
       await loadAuth();
       await refreshAll();
+      if(!gameId){
+        try{
+          const code = (document.getElementById('code').value.trim() || 'holiday');
+          localStorage.setItem('poker_code', code);
+          const r = await jget(`${API_BASE}/game_get_or_create?code=${encodeURIComponent(code)}`);
+          if(r && r.ok){
+            gameId = parseInt(r.game_id||'0',10) || 0;
+            document.getElementById('gid').value = String(gameId || '');
+            document.getElementById('gameHint').innerText = `房间 ${r.code} game_id=${gameId}`;
+            await pollOnce();
+            startPolling();
+          }
+        }catch(e){}
+      }
     }
     init();
   </script>
