@@ -1697,6 +1697,46 @@ class Handler(BaseHTTPRequestHandler):
                 pid = poker_upsert_player(uid, user_data.get("username"))
                 return self._send(200, _json_bytes({"ok": True, "user": u, "player_id": pid}), "application/json; charset=utf-8")
 
+            if path == "/api/webapp/poker/game_get_or_create":
+                if not user_data:
+                    return self._send(401, b"Invalid initData", "text/plain")
+                if not _poker_is_allowed(user_data):
+                    return self._send(403, _json_bytes({"ok": False, "error": "not allowed"}), "application/json; charset=utf-8")
+                code = (qs.get("code", ["default"])[0] or "default").strip()
+                r = poker_get_or_create_game(code, int(user_data.get("id")), user_data.get("username"))
+                return self._send(200, _json_bytes(r), "application/json; charset=utf-8")
+
+            if path == "/api/webapp/poker/game_join":
+                if not user_data:
+                    return self._send(401, b"Invalid initData", "text/plain")
+                if not _poker_is_allowed(user_data):
+                    return self._send(403, _json_bytes({"ok": False, "error": "not allowed"}), "application/json; charset=utf-8")
+                code = (qs.get("code", ["default"])[0] or "default").strip()
+                r = poker_join_game(code, int(user_data.get("id")), user_data.get("username"))
+                return self._send(200, _json_bytes(r), "application/json; charset=utf-8")
+
+            if path == "/api/webapp/poker/game_start":
+                if not user_data:
+                    return self._send(401, b"Invalid initData", "text/plain")
+                if not _poker_is_allowed(user_data):
+                    return self._send(403, _json_bytes({"ok": False, "error": "not allowed"}), "application/json; charset=utf-8")
+                gid = int((qs.get("game_id", ["0"])[0] or "0"))
+                r = poker_start_game(gid)
+                return self._send(200, _json_bytes(r), "application/json; charset=utf-8")
+
+            if path == "/api/webapp/poker/game_state":
+                if not user_data:
+                    return self._send(401, b"Invalid initData", "text/plain")
+                if not _poker_is_allowed(user_data):
+                    return self._send(403, _json_bytes({"ok": False, "error": "not allowed"}), "application/json; charset=utf-8")
+                gid = int((qs.get("game_id", ["0"])[0] or "0"))
+                try:
+                    poker_auto_fold_if_timeout(gid)
+                except Exception:
+                    pass
+                r = poker_game_state(gid, int(user_data.get("id")))
+                return self._send(200, _json_bytes(r), "application/json; charset=utf-8")
+
             if path == "/api/webapp/poker/balances":
                 if not user_data:
                     return self._send(401, b"Invalid initData", "text/plain")

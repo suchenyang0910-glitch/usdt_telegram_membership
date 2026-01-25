@@ -193,12 +193,28 @@
 
     async function jget(url){
       const r = await fetch(url, { headers });
-      if(!r.ok) throw new Error(await r.text());
+      if(!r.ok){
+        const t = await r.text();
+        let msg = t || ('http ' + r.status);
+        try{
+          const j = JSON.parse(t||'{}');
+          if(j && (j.error || j.message)) msg = j.error || j.message;
+        }catch(e){}
+        throw new Error(msg);
+      }
       return await r.json();
     }
     async function jpost(url, body){
       const r = await fetch(url, { method:'POST', headers: { ...headers, 'Content-Type':'application/json' }, body: JSON.stringify(body||{}) });
-      if(!r.ok) throw new Error(await r.text());
+      if(!r.ok){
+        const t = await r.text();
+        let msg = t || ('http ' + r.status);
+        try{
+          const j = JSON.parse(t||'{}');
+          if(j && (j.error || j.message)) msg = j.error || j.message;
+        }catch(e){}
+        throw new Error(msg);
+      }
       return await r.json();
     }
 
@@ -256,7 +272,7 @@
           document.getElementById('gameHint').innerText = (r && r.error) ? r.error : '失败';
         }
       }catch(e){
-        document.getElementById('gameHint').innerText = '失败';
+        document.getElementById('gameHint').innerText = (e && e.message) ? e.message : '失败';
       }
     }
 
@@ -274,7 +290,7 @@
           document.getElementById('gameHint').innerText = (r && r.error) ? r.error : '失败';
         }
       }catch(e){
-        document.getElementById('gameHint').innerText = '失败';
+        document.getElementById('gameHint').innerText = (e && e.message) ? e.message : '失败';
       }
     }
 
@@ -292,7 +308,7 @@
           document.getElementById('gameHint').innerText = (r && r.error) ? r.error : '失败';
         }
       }catch(e){
-        document.getElementById('gameHint').innerText = '失败';
+        document.getElementById('gameHint').innerText = (e && e.message) ? e.message : '失败';
       }
     }
 
