@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-from telethon.errors import FileReferenceExpiredError, FloodWaitError
+from telethon.errors import FileMigrateError, FileReferenceExpiredError, FloodWaitError
 
 
 def _maybe_load_local_env():
@@ -220,7 +220,10 @@ async def _download_media_with_timeouts(
         while True:
             done, _ = await asyncio.wait({task}, timeout=5)
             if task in done:
-                return await task
+                try:
+                    return await task
+                except asyncio.CancelledError:
+                    raise asyncio.TimeoutError("download cancelled")
             now = loop.time()
             if overall is not None and (now - started) > overall:
                 task.cancel()
@@ -496,11 +499,17 @@ async def _download_group(
                     pass
                 await asyncio.sleep(min(60, 5 * attempts))
                 continue
+            except FileMigrateError:
+                await asyncio.sleep(min(60, 5 * attempts))
+                continue
             except FloodWaitError as e:
                 wait_s = int(getattr(e, "seconds", None) or 0) or 60
                 await asyncio.sleep(min(3600, wait_s + 5))
                 continue
             except asyncio.TimeoutError:
+                await asyncio.sleep(min(60, 5 * attempts))
+                continue
+            except asyncio.CancelledError:
                 await asyncio.sleep(min(60, 5 * attempts))
                 continue
             except Exception:
@@ -643,6 +652,8 @@ async def run_forever():
                     try:
                         await _download_group(client, s, gid, items, state_lock, big_sem)
                     except Exception:
+                        return
+                    except asyncio.CancelledError:
                         return
 
             for gid, items in groups:

@@ -318,6 +318,31 @@ def init_tables():
     _ensure_index(cur, "video_download_jobs", "idx_vdj_status_created", "status, created_at")
     _ensure_index(cur, "video_download_jobs", "idx_vdj_updated", "updated_at")
 
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS poker_players (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            telegram_id BIGINT NOT NULL,
+            username VARCHAR(128),
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+    )
+    _ensure_index(cur, "poker_players", "idx_poker_players_telegram", "telegram_id")
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS poker_ledgers (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            player_id INT NOT NULL,
+            amount DECIMAL(24,8) NOT NULL,
+            note VARCHAR(256),
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+    )
+    _ensure_index(cur, "poker_ledgers", "idx_poker_ledgers_player_time", "player_id, created_at")
+
     cur.close()
     try:
         conn.close()
@@ -1244,6 +1269,87 @@ def user_viewed_tags(telegram_id: int, limit: int = 200) -> list[dict]:
     out = [{"tag": k, "count": v} for k, v in counts.items()]
     out.sort(key=lambda x: (-int(x.get("count") or 0), str(x.get("tag") or "")))
     return out[:50]
+
+
+def poker_upsert_player(telegram_id: int, username: str | None) -> int:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM poker_players WHERE telegram_id=%s LIMIT 1", (int(telegram_id),))
+    row = cur.fetchone()
+    if row:
+        pid = int(row[0] or 0)
+        cur.execute("UPDATE poker_players SET username=%s WHERE id=%s", ((username or "")[:128] or None, pid))
+    else:
+        cur.execute(
+            "INSERT INTO poker_players (telegram_id, username) VALUES (%s,%s)",
+            (int(telegram_id), (username or "")[:128] or None),
+        )
+        pid = int(cur.lastrowid or 0)
+    cur.close()
+    conn.close()
+    return pid
+
+
+def poker_add_ledger(player_id: int, amount: Decimal, note: str | None):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO poker_ledgers (player_id, amount, note) VALUES (%s,%s,%s)",
+        (int(player_id), Decimal(str(amount or "0")), (note or "")[:256] or None),
+    )
+    cur.close()
+    conn.close()
+
+
+def poker_list_ledgers(limit: int = 200, days: int = 30) -> list[dict]:
+    limit = max(1, min(int(limit or 200), 500))
+    days = max(1, min(int(days or 30), 365))
+    conn = get_conn()
+    cur = conn.cursor(dictionary=True)
+    cur.execute(
+        """
+        SELECT
+          l.id,
+          p.telegram_id,
+          p.username,
+          l.amount,
+          l.note,
+          l.created_at
+        FROM poker_ledgers l
+        JOIN poker_players p ON p.id = l.player_id
+        WHERE l.created_at >= (UTC_TIMESTAMP() - INTERVAL %s DAY)
+        ORDER BY l.created_at DESC, l.id DESC
+        LIMIT %s
+        """,
+        (int(days), int(limit)),
+    )
+    rows = cur.fetchall() or []
+    cur.close()
+    conn.close()
+    return rows
+
+
+def poker_balances() -> list[dict]:
+    conn = get_conn()
+    cur = conn.cursor(dictionary=True)
+    cur.execute(
+        """
+        SELECT
+          p.id AS player_id,
+          p.telegram_id,
+          p.username,
+          COALESCE(SUM(l.amount),0) AS balance,
+          MAX(l.created_at) AS last_at
+        FROM poker_players p
+        LEFT JOIN poker_ledgers l ON l.player_id = p.id
+        GROUP BY p.id, p.telegram_id, p.username
+        ORDER BY balance DESC, p.id ASC
+        """
+    )
+    rows = cur.fetchall() or []
+    cur.close()
+    conn.close()
+    return rows
 
 
 def admin_create_video_job(local_filename: str, caption: str, cover_url: str, tags: str, category_id: int, sort_order: int, is_published: bool, published_at: datetime | None, upload_status: str = "pending", server_file_path: str | None = None, server_file_size: int | None = None, video_url: str | None = None, preview_url: str | None = None) -> int:

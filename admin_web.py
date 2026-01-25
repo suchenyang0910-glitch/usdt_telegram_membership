@@ -74,6 +74,10 @@ from core.models import (
     user_viewed_tags,
     delete_banner,
     delete_category,
+    poker_add_ledger,
+    poker_balances,
+    poker_list_ledgers,
+    poker_upsert_player,
 )
 from bot.payments import compute_new_paid_until
 
@@ -332,6 +336,37 @@ def _uploads_file_exists(cover_url: str) -> bool:
     rel = s[len("/uploads/") :]
     full = _safe_join(_uploads_dir(), rel)
     return bool(full and os.path.exists(full) and os.path.isfile(full))
+
+
+def _to_int_list_env(name: str) -> list[int]:
+    raw = (os.getenv(name, "") or "").strip()
+    if not raw:
+        return []
+    out: list[int] = []
+    for part in raw.replace("，", ",").split(","):
+        s = (part or "").strip()
+        if not s:
+            continue
+        try:
+            v = int(s)
+        except Exception:
+            continue
+        if v and v not in out:
+            out.append(v)
+    return out
+
+
+def _poker_is_allowed(user_data: dict | None) -> bool:
+    allow = _to_int_list_env("POKER_ALLOW_USER_IDS")
+    if not allow:
+        return True
+    if not user_data:
+        return False
+    try:
+        uid = int(user_data.get("id") or 0)
+    except Exception:
+        uid = 0
+    return uid in allow
 
 
 INDEX_HTML = """<!doctype html>
@@ -1476,6 +1511,40 @@ class Handler(BaseHTTPRequestHandler):
                 body = _json_bytes({"plans": PLANS})
                 return self._send_headers_only(200, "application/json; charset=utf-8", len(body))
 
+            if path == "/api/webapp/poker/auth":
+                if not user_data:
+                    return self._send_headers_only(401, "text/plain", len(b"Invalid initData"))
+                if not _poker_is_allowed(user_data):
+                    body = _json_bytes({"ok": False, "error": "not allowed"})
+                    return self._send_headers_only(403, "application/json; charset=utf-8", len(body))
+                uid = int(user_data.get("id"))
+                u = get_user(uid)
+                pid = poker_upsert_player(uid, user_data.get("username"))
+                body = _json_bytes({"ok": True, "user": u, "player_id": pid})
+                return self._send_headers_only(200, "application/json; charset=utf-8", len(body))
+
+            if path == "/api/webapp/poker/balances":
+                if not user_data:
+                    return self._send_headers_only(401, "text/plain", len(b"Invalid initData"))
+                if not _poker_is_allowed(user_data):
+                    body = _json_bytes({"ok": False, "error": "not allowed"})
+                    return self._send_headers_only(403, "application/json; charset=utf-8", len(body))
+                poker_upsert_player(int(user_data.get("id")), user_data.get("username"))
+                body = _json_bytes({"ok": True, "items": poker_balances()})
+                return self._send_headers_only(200, "application/json; charset=utf-8", len(body))
+
+            if path == "/api/webapp/poker/ledgers":
+                if not user_data:
+                    return self._send_headers_only(401, "text/plain", len(b"Invalid initData"))
+                if not _poker_is_allowed(user_data):
+                    body = _json_bytes({"ok": False, "error": "not allowed"})
+                    return self._send_headers_only(403, "application/json; charset=utf-8", len(body))
+                poker_upsert_player(int(user_data.get("id")), user_data.get("username"))
+                limit = int((qs.get("limit", ["200"])[0] or "200"))
+                days = int((qs.get("days", ["30"])[0] or "30"))
+                body = _json_bytes({"ok": True, "items": poker_list_ledgers(limit=limit, days=days)})
+                return self._send_headers_only(200, "application/json; charset=utf-8", len(body))
+
             if path == "/api/webapp/videos":
                 q = (qs.get("q", [""])[0] or "").strip()
                 page = int((qs.get("page", ["1"])[0] or "1"))
@@ -1563,6 +1632,34 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/webapp/plans":
                 return self._send(200, _json_bytes({"plans": PLANS}), "application/json; charset=utf-8")
+
+            if path == "/api/webapp/poker/auth":
+                if not user_data:
+                    return self._send(401, b"Invalid initData", "text/plain")
+                if not _poker_is_allowed(user_data):
+                    return self._send(403, _json_bytes({"ok": False, "error": "not allowed"}), "application/json; charset=utf-8")
+                uid = int(user_data.get("id"))
+                u = get_user(uid)
+                pid = poker_upsert_player(uid, user_data.get("username"))
+                return self._send(200, _json_bytes({"ok": True, "user": u, "player_id": pid}), "application/json; charset=utf-8")
+
+            if path == "/api/webapp/poker/balances":
+                if not user_data:
+                    return self._send(401, b"Invalid initData", "text/plain")
+                if not _poker_is_allowed(user_data):
+                    return self._send(403, _json_bytes({"ok": False, "error": "not allowed"}), "application/json; charset=utf-8")
+                poker_upsert_player(int(user_data.get("id")), user_data.get("username"))
+                return self._send(200, _json_bytes({"ok": True, "items": poker_balances()}), "application/json; charset=utf-8")
+
+            if path == "/api/webapp/poker/ledgers":
+                if not user_data:
+                    return self._send(401, b"Invalid initData", "text/plain")
+                if not _poker_is_allowed(user_data):
+                    return self._send(403, _json_bytes({"ok": False, "error": "not allowed"}), "application/json; charset=utf-8")
+                poker_upsert_player(int(user_data.get("id")), user_data.get("username"))
+                limit = int((qs.get("limit", ["200"])[0] or "200"))
+                days = int((qs.get("days", ["30"])[0] or "30"))
+                return self._send(200, _json_bytes({"ok": True, "items": poker_list_ledgers(limit=limit, days=days)}), "application/json; charset=utf-8")
 
             if path == "/api/webapp/videos":
                 q = (qs.get("q", [""])[0] or "").strip()
@@ -1836,6 +1933,36 @@ class Handler(BaseHTTPRequestHandler):
                     finished_at=None,
                     error=data.get("error"),
                 )
+                return self._send(200, _json_bytes({"ok": True}), "application/json; charset=utf-8")
+            return self._send(404, b"Not Found", "text/plain")
+
+        if path.startswith("/api/webapp/poker/"):
+            qs = parse_qs(u.query)
+            init_data = self.headers.get("X-Telegram-Init-Data") or (qs.get("initData", [""])[0] or "")
+            user_data = _validate_webapp_init_data(init_data, BOT_TOKEN)
+            if not user_data:
+                return self._send(401, b"Invalid initData", "text/plain")
+            if not _poker_is_allowed(user_data):
+                return self._send(403, _json_bytes({"ok": False, "error": "not allowed"}), "application/json; charset=utf-8")
+            try:
+                n = int(self.headers.get("Content-Length") or "0")
+            except Exception:
+                n = 0
+            raw = self.rfile.read(n) if n > 0 else b"{}"
+            try:
+                data = json.loads(raw.decode("utf-8", errors="ignore") or "{}")
+            except Exception:
+                data = {}
+            if path == "/api/webapp/poker/ledger_add":
+                uid = int(user_data.get("id"))
+                pid = poker_upsert_player(uid, user_data.get("username"))
+                amt_raw = str(data.get("amount") or "").strip()
+                try:
+                    amt = Decimal(amt_raw)
+                except Exception:
+                    return self._send(400, _json_bytes({"ok": False, "error": "bad amount"}), "application/json; charset=utf-8")
+                note = (data.get("note") or "").strip()
+                poker_add_ledger(pid, amt, note)
                 return self._send(200, _json_bytes({"ok": True}), "application/json; charset=utf-8")
             return self._send(404, b"Not Found", "text/plain")
 
